@@ -3,7 +3,6 @@
 #include "page_mgr.h"
 #include "motor.h"
 
-LV_FONT_DECLARE(lv_font_montserrat_14);
 LV_FONT_DECLARE(lv_font_montserrat_26);
 LV_FONT_DECLARE(lv_font_msyh_16);
 
@@ -112,16 +111,28 @@ static void pg_playground_timer(lv_timer_t *t)
     }
 }
 
+/* 触摸点击整页 → 切换到下一种手感模式 */
+static void pg_tap_cb(lv_event_t *e)
+{
+    page_t *p = (page_t *)lv_event_get_user_data(e);
+    pg_data_t *d = p->data;
+    int count = motor_get_mode_count();
+    d->mode = (d->mode + 1) % count;
+    pg_apply_mode(d);
+    pm_shake();
+}
+
 static void pg_playground_create(page_t *p)
 {
     pg_data_t *d = calloc(1, sizeof(pg_data_t));
     p->data = d;
     d->mode = MOTOR_MODE_COARSE_STRONG_DETENTS;
+    p->title = "\xE6\x89\x8B\xE6\x84\x9F";
 
     lv_obj_t *hint = lv_label_create(p->root);
     lv_obj_set_style_text_color(hint, lv_color_hex(XK_COLOR_FAINT), 0);
     lv_obj_set_style_text_font(hint, &lv_font_msyh_16, 0);
-    lv_label_set_text(hint, "\xE5\xBF\xAB\xE6\x97\x8B\xE6\x8D\xA2\xE6\xA8\xA1\xE5\xBC\x8F \xC2\xB7 \xE5\x8F\x8D\xE8\xBD\xAC\xE8\xBF\x94\xE5\x9B\x9E");
+    lv_label_set_text(hint, "\xE7\x82\xB9\xE5\x87\xBB\xE5\x88\x87\xE6\x8D\xA2\xE6\xA8\xA1\xE5\xBC\x8F");
     lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -10);
 
     d->label_mode = lv_label_create(p->root);
@@ -158,7 +169,7 @@ static void pg_playground_create(page_t *p)
     lv_scale_set_angle_range(d->scale, 360);
     lv_scale_set_rotation(d->scale, 270);
 
-    /* needle (blue line, X-Knob "dot") */
+    /* needle (blue line) */
     static lv_point_precise_t needle_points[2] = { {0, 0}, {0, 0} };
     d->needle = lv_line_create(d->scale);
     lv_line_set_points_mutable(d->needle, needle_points, 2);
@@ -188,6 +199,10 @@ static void pg_playground_create(page_t *p)
 
     pg_apply_mode(d);
     d->timer = lv_timer_create(pg_playground_timer, 50, d);
+
+    /* 整页点击切换模式 (页面根容器) */
+    lv_obj_add_flag(p->root, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(p->root, pg_tap_cb, LV_EVENT_CLICKED, p);
 }
 
 static void pg_playground_destroy(page_t *p)
@@ -200,24 +215,9 @@ static void pg_playground_destroy(page_t *p)
     p->data = NULL;
 }
 
-static void pg_playground_on_rotate(page_t *p, int dir)
+static void pg_playground_on_rotate(page_t *p, int32_t steps)
 {
-    (void)p;
-    (void)dir;
-}
-
-static void pg_playground_on_confirm(page_t *p)
-{
-    pg_data_t *d = p->data;
-    int count = motor_get_mode_count();
-    if (d->mode + 1 >= count) {
-        /* last mode -> back to menu (X-Knob behavior) */
-        pm_pop();
-    } else {
-        d->mode++;
-        pg_apply_mode(d);
-        pm_shake();
-    }
+    /* 位置由电机力反馈控制, 这里只负责显示 */
 }
 
 static void pg_playground_on_back(page_t *p)
@@ -233,7 +233,6 @@ const page_ops_t pg_playground_ops = {
     .create = pg_playground_create,
     .destroy = pg_playground_destroy,
     .on_rotate = pg_playground_on_rotate,
-    .on_confirm = pg_playground_on_confirm,
     .on_back = pg_playground_on_back,
     .on_tick = pg_playground_on_tick,
 };

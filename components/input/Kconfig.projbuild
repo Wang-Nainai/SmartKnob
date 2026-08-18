@@ -1,0 +1,13 @@
+menu "Knob Input"
+
+    config KNOB_INPUT_POLL_MS
+        int "Knob position poll interval (ms)"
+        default 5
+        range 1 50
+
+    config KNOB_INPUT_QUEUE_LEN
+        int "Knob event queue length"
+        default 16
+        range 4 64
+
+endmenu

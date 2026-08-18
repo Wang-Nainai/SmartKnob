@@ -86,6 +86,28 @@ static void setting_refresh_focus(setting_data_t *d)
     }
 }
 
+/* 触摸点击设置项 → 进入编辑 */
+static void setting_row_cb(lv_event_t *e)
+{
+    lv_obj_t *obj = lv_event_get_current_target(e);
+    page_t *p = (page_t *)lv_obj_get_user_data(obj);
+    setting_data_t *d = p->data;
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    if (d->edit_item < 0) {
+        setting_show_edit(d, idx);
+    }
+}
+
+/* 编辑视图: 触摸点击 → 保存退出 */
+static void setting_edit_tap_cb(lv_event_t *e)
+{
+    page_t *p = (page_t *)lv_event_get_user_data(e);
+    setting_data_t *d = p->data;
+    if (d->edit_item >= 0) {
+        setting_exit_edit(d, true);
+    }
+}
+
 static void setting_timer_cb(lv_timer_t *t)
 {
     setting_data_t *d = lv_timer_get_user_data(t);
@@ -115,6 +137,7 @@ static void pg_setting_create(page_t *p)
     d->edit_item = -1;
     d->brightness = display_get_brightness();
     d->timeout_min = display_get_screen_timeout() / 60;
+    p->title = "\xE8\xAE\xBE\xE7\xBD\xAE";
 
     d->hint = lv_label_create(p->root);
     lv_obj_set_style_text_color(d->hint, lv_color_hex(XK_COLOR_FAINT), 0);
@@ -134,6 +157,9 @@ static void pg_setting_create(page_t *p)
         lv_obj_set_style_border_side(row, LV_BORDER_SIDE_LEFT, 0);
         lv_obj_set_style_border_color(row, lv_color_hex(XK_COLOR_RED), 0);
         lv_obj_set_style_border_post(row, true, 0);
+        lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_user_data(row, p);
+        lv_obj_add_event_cb(row, setting_row_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
 
         lv_obj_t *title = lv_label_create(row);
         lv_obj_set_style_text_color(title, lv_color_hex(XK_COLOR_TEXT), 0);
@@ -208,6 +234,10 @@ static void pg_setting_create(page_t *p)
 
     d->timer = lv_timer_create(setting_timer_cb, 100, d);
     motor_set_mode(MOTOR_MODE_COARSE_STRONG_DETENTS, 0, 0);
+
+    /* 编辑视图: 整页点击保存退出 */
+    lv_obj_add_flag(p->root, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(p->root, setting_edit_tap_cb, LV_EVENT_CLICKED, p);
 }
 
 static void pg_setting_destroy(page_t *p)
@@ -220,22 +250,15 @@ static void pg_setting_destroy(page_t *p)
     p->data = NULL;
 }
 
-static void pg_setting_on_rotate(page_t *p, int dir)
+static void pg_setting_on_rotate(page_t *p, int32_t steps)
 {
     setting_data_t *d = p->data;
     if (d->edit_item < 0) {
-        d->focus = (d->focus + dir + 2) % 2;
+        d->focus = (d->focus + steps) % 2;
+        if (d->focus < 0) {
+            d->focus += 2;
+        }
         setting_refresh_focus(d);
-    }
-}
-
-static void pg_setting_on_confirm(page_t *p)
-{
-    setting_data_t *d = p->data;
-    if (d->edit_item < 0) {
-        setting_show_edit(d, d->focus);
-    } else {
-        setting_exit_edit(d, true);
     }
 }
 
@@ -257,7 +280,6 @@ const page_ops_t pg_setting_ops = {
     .create = pg_setting_create,
     .destroy = pg_setting_destroy,
     .on_rotate = pg_setting_on_rotate,
-    .on_confirm = pg_setting_on_confirm,
     .on_back = pg_setting_on_back,
     .on_tick = pg_setting_on_tick,
 };

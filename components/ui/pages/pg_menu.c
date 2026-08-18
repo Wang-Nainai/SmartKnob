@@ -43,11 +43,25 @@ static void menu_refresh(menu_data_t *d)
     }
 }
 
-static void menu_move_focus(menu_data_t *d, int dir)
+static void menu_move_focus(menu_data_t *d, int steps)
 {
     int n = (int)MENU_COUNT;
-    d->focus = (d->focus + dir + n) % n;
+    d->focus = (d->focus + steps) % n;
+    if (d->focus < 0) {
+        d->focus += n;
+    }
     menu_refresh(d);
+}
+
+/* 触摸点击菜单项 → 进入对应页面 */
+static void menu_row_cb(lv_event_t *e)
+{
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    if (idx < 0 || idx >= (int)MENU_COUNT) {
+        return;
+    }
+    pm_push(items[idx].page);
+    pm_shake();
 }
 
 static void pg_menu_create(page_t *p)
@@ -55,11 +69,12 @@ static void pg_menu_create(page_t *p)
     menu_data_t *d = calloc(1, sizeof(menu_data_t));
     p->data = d;
     d->focus = 0;
+    p->title = "SmartKnob";  /* 根页标题 */
 
     lv_obj_t *hint = lv_label_create(p->root);
     lv_obj_set_style_text_color(hint, lv_color_hex(XK_COLOR_FAINT), 0);
     lv_obj_set_style_text_font(hint, &lv_font_msyh_16, 0);
-    lv_label_set_text(hint, "\xE6\x85\xA2\xE8\xBD\xAC\xE9\x80\x89\xE6\x8B\xA9 \xC2\xB7 \xE5\xBF\xAB\xE6\x97\x8B\xE8\xBF\x9B\xE5\x85\xA5");
+    lv_label_set_text(hint, "\xE6\x97\x8B\xE8\xBD\xAC\xE9\x80\x89\xE6\x8B\xA9 \xC2\xB7 \xE7\x82\xB9\xE5\x87\xBB\xE8\xBF\x9B\xE5\x85\xA5");
     lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -10);
 
     for (int i = 0; i < MENU_COUNT; i++) {
@@ -70,6 +85,10 @@ static void pg_menu_create(page_t *p)
         lv_obj_set_style_border_side(row, LV_BORDER_SIDE_LEFT, 0);
         lv_obj_set_style_border_color(row, lv_color_hex(XK_COLOR_RED), 0);
         lv_obj_set_style_border_post(row, true, 0);
+        lv_obj_set_style_bg_color(row, lv_color_hex(XK_COLOR_PANEL), 0);
+        lv_obj_set_style_radius(row, 0, 0);
+        lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(row, menu_row_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
 
         lv_obj_t *icon = lv_label_create(row);
         lv_obj_set_style_text_color(icon, lv_color_hex(XK_COLOR_TEXT), 0);
@@ -110,16 +129,9 @@ static void pg_menu_destroy(page_t *p)
     p->data = NULL;
 }
 
-static void pg_menu_on_rotate(page_t *p, int dir)
+static void pg_menu_on_rotate(page_t *p, int32_t steps)
 {
-    menu_move_focus((menu_data_t *)p->data, dir);
-}
-
-static void pg_menu_on_confirm(page_t *p)
-{
-    menu_data_t *d = p->data;
-    pm_push(items[d->focus].page);
-    pm_shake();
+    menu_move_focus((menu_data_t *)p->data, steps);
 }
 
 static void pg_menu_on_back(page_t *p)
@@ -135,7 +147,6 @@ const page_ops_t pg_menu_ops = {
     .create = pg_menu_create,
     .destroy = pg_menu_destroy,
     .on_rotate = pg_menu_on_rotate,
-    .on_confirm = pg_menu_on_confirm,
     .on_back = pg_menu_on_back,
     .on_tick = pg_menu_on_tick,
 };

@@ -25,6 +25,7 @@ static void pg_startup_create(page_t *p)
 {
     startup_data_t *d = calloc(1, sizeof(startup_data_t));
     p->data = d;
+    p->title = "SmartKnob";
 
     /* X-Knob style: expanding underline + sliding logo text */
     lv_obj_t *cont = lv_obj_create(p->root);
@@ -80,7 +81,6 @@ const page_ops_t pg_startup_ops = {
     .create = pg_startup_create,
     .destroy = pg_startup_destroy,
     .on_rotate = NULL,
-    .on_confirm = NULL,
     .on_back = NULL,
     .on_tick = NULL,
 };

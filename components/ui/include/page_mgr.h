@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lvgl.h"
+#include <stdint.h>
 
 typedef enum {
     PAGE_STARTUP = 0,
@@ -15,19 +16,25 @@ typedef enum {
 
 typedef struct page page_t;
 
+/* 页面生命周期与输入回调。
+ * 输入模型(见 docs/ARCHITECTURE.md §3):
+ *   - 旋钮旋转 → on_rotate(steps): 浏览/调节 (steps>0 顺时针)
+ *   - 触摸返回按钮 → on_back
+ *   - 页面内控件触摸 → 页面自行注册 LVGL 事件 (进入/确认/切换)
+ * 不再依赖"快旋确认/反快旋返回"手势(易误判, 见 BUG-003)。 */
 typedef struct {
     void (*create)(page_t *p);
     void (*destroy)(page_t *p);
-    void (*on_rotate)(page_t *p, int dir);
-    void (*on_confirm)(page_t *p);
+    void (*on_rotate)(page_t *p, int32_t steps);
     void (*on_back)(page_t *p);
     void (*on_tick)(page_t *p);
 } page_ops_t;
 
 typedef struct page {
     const page_ops_t *ops;
-    lv_obj_t *root;
-    void *data;
+    lv_obj_t *root;        /* 页面根容器(由框架创建) */
+    const char *title;     /* 顶部状态栏显示的标题 */
+    void *data;            /* 页面私有数据 */
 } page_t;
 
 /* Page stack */
@@ -38,6 +45,7 @@ void pm_pop(void);
 page_t *pm_top(void);
 bool pm_busy(void);
 void pm_shake(void);
+int pm_depth(void);
 
 /* Common X-Knob color scheme */
 #define XK_COLOR_BG       0x000000

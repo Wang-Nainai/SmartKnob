@@ -54,6 +54,7 @@ static void pg_sysinfo_create(page_t *p)
 {
     sysinfo_data_t *d = calloc(1, sizeof(sysinfo_data_t));
     p->data = d;
+    p->title = "\xE7\xB3\xBB\xE7\xBB\x9F";
 
     static const char *labels[7] = {
         "VERSION",
@@ -91,11 +92,7 @@ static void pg_sysinfo_destroy(page_t *p)
     p->data = NULL;
 }
 
-static void pg_sysinfo_on_rotate(page_t *p, int dir)
-{
-}
-
-static void pg_sysinfo_on_confirm(page_t *p)
+static void pg_sysinfo_on_rotate(page_t *p, int32_t steps)
 {
 }
 
@@ -113,7 +110,6 @@ const page_ops_t pg_sysinfo_ops = {
     .create = pg_sysinfo_create,
     .destroy = pg_sysinfo_destroy,
     .on_rotate = pg_sysinfo_on_rotate,
-    .on_confirm = pg_sysinfo_on_confirm,
     .on_back = pg_sysinfo_on_back,
     .on_tick = pg_sysinfo_on_tick,
 };

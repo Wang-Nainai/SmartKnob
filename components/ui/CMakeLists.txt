@@ -8,4 +8,4 @@ idf_component_register(SRCS "smartknob_ui.c"
                        "pages/pg_sysinfo.c"
                        "fonts/lv_font_msyh_16.c"
                        INCLUDE_DIRS include
-                       REQUIRES lvgl__lvgl display mqtt_ha motor wifi esp_app_format esp_timer nvs_flash)
+                       REQUIRES lvgl__lvgl display mqtt_ha motor wifi esp_app_format esp_timer nvs_flash input)

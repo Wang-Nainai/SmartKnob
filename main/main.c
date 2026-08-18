@@ -12,6 +12,7 @@
 #include "mqtt.h"
 #include "motor.h"
 #include "webcfg.h"
+#include "input.h"
 
 static const char *TAG = "SmartKnob";
 
@@ -90,6 +91,8 @@ void app_main(void)
 #endif
 
     smartknob_ui_init();
+
+    knob_input_init();
 
     ESP_LOGI(TAG, "Initializing SCD40");
     if (scd40_init() == ESP_OK) {

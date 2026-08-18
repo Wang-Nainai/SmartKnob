@@ -1,0 +1,85 @@
+# SmartKnob 软件架构（目标）与阶段推进记录
+
+本文档记录项目重构的**目标架构**、**已完成的阶段**与**验证状态**。
+验证状态统一使用：
+- `编译验证：通过/未通过`
+- `静态分析：通过/未通过`
+- `代码验证：通过`（指代码层面可确认的数据流/接口/竞态）
+- `硬件实测：尚未验证`（无实体硬件时一律写此状态）
+
+---
+
+## 1. 目标架构
+
+```
+                     SmartKnob
+                         │
+        ┌────────────────┼────────────────┐
+        │                │                │
+      Motor            Input              UI
+        │                │                │
+      Haptic         Gesture/Event       LVGL
+        │                │                │
+        └──────────── Event / State ──────┘
+                         │
+            ┌────────────┼────────────┐
+            │            │            │
+          SCD40         MQTT         Web
+                         │
+                        HA
+```
+
+## 2. 核心原则
+
+1. **Motor 单任务独占**（Phase 1 已完成）：
+   只有 `motor_task` 可以调用 `BLDCMotor / BLDCDriver / Encoder / loopFOC / move`。
+   其它模块只能：投递命令（`motor_cmd_queue`）+ 读状态快照（volatile）。
+2. **输入与 UI 解耦**：
+   旋钮原始位置 → `input` 组件 → 标准化事件（`knob_event_t`）→ 队列 → UI 消费。
+   UI 不直接轮询 motor 位置做手势。
+3. **UI 不直接操作电机**：
+   UI 只能调 `motor_set_mode* / motor_shake / motor_disable`（均为命令投递）。
+4. **实时性隔离**：
+   WiFi/MQTT/SCD40/Web 断网或阻塞不得影响 Motor 与 UI。
+
+## 3. 输入交互模型（设计决策）
+
+硬件输入 = **旋钮 + 触摸屏**。
+
+| 动作 | 事件 | 用途 |
+|---|---|---|
+| 旋转 | `KNOB_EVENT_ROTATE`（方向 + 步数） | 浏览焦点 / 调节数值 |
+| 触摸点击 | LVGL 原生 tap 事件 | 确认 / 选择 / 进入 |
+| 触摸滑动 | LVGL 原生 slide 事件 | 返回上一页 |
+
+**设计决策（BUG-003）**：旧系统用"快旋 3 步/250ms = 确认、反快旋 = 返回"的手势。
+该手势在无按键硬件上是"最后手段"，但存在明显误判风险（快速浏览被当成确认、回退误判为返回）。
+由于本项目具备触摸屏，确认/返回应优先走触摸，旋转只负责浏览/调节，以最不易误判的方式操作。
+快旋手势不作为导航依赖（可后续按需恢复，见 Phase 8）。
+
+## 4. 阶段推进记录
+
+| 阶段 | 内容 | 状态 | 验证 |
+|---|---|---|---|
+| Phase 0 | 基线（git 独立仓库 / sdkconfig.defaults / README / 现状审计） | ✅ 完成 | 编译通过；硬件实测未验证 |
+| Phase 1 | Motor 命令队列 + 单任务独占 + 非阻塞 shake + disable | ✅ 完成 | 编译通过、静态通过；硬件实测未验证 |
+| Phase 2 | Input 组件（旋钮 ROTATE 事件，去抖/去重/复位） | ⏳ | 见阶段内记录 |
+| Phase 3 | Application/Navigation（统一事件消费 + 导航状态） | ⏳ | |
+| Phase 4 | UI/LVGL 重构（参考 X-Knob 视觉与交互） | ⏳ | |
+| Phase 5 | Sensor Manager（SCD40 → 共享状态 → UI/MQTT/Web） | ⏳ | |
+| Phase 6 | WiFi / MQTT / HA（断网不影响本地） | ⏳ | |
+| Phase 7 | Web / OTA / Config / NVS | ⏳ | |
+| Phase 8 | 扩展（LED 状态灯 / 音量 / HID 等） | ⏳ | |
+
+## 5. 跨模块数据流（现状）
+
+```
+motor_task: Encoder → loopFOC → haptic_update → snap_position(volatile)
+input_task: 轮询 snap_position → knob_event_t → 队列
+LVGL_task:  消费 knob_event_t + LVGL 触摸事件 → 页面导航
+            → motor_set_mode* / motor_shake（命令队列）
+scd40_task: I2C → 全局 env 快照 → UI 环境页 / MQTT publish / Web status
+wifi:       STA + 重连 → 状态 → UI 状态栏 / webcfg / led
+mqtt:       esp-mqtt 异步 → HA discovery + state + 控制命令
+webcfg:     HTTP / OTA / NVS 配置
+```

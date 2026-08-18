@@ -80,6 +80,7 @@ static void pg_env_create(page_t *p)
 {
     env_data_t *d = calloc(1, sizeof(env_data_t));
     p->data = d;
+    p->title = "\xE7\x8E\xAF\xE5\xA2\x83";
 
     lv_obj_t *hint = lv_label_create(p->root);
     lv_obj_set_style_text_color(hint, lv_color_hex(XK_COLOR_FAINT), 0);
@@ -157,11 +158,7 @@ static void pg_env_destroy(page_t *p)
     p->data = NULL;
 }
 
-static void pg_env_on_rotate(page_t *p, int dir)
-{
-}
-
-static void pg_env_on_confirm(page_t *p)
+static void pg_env_on_rotate(page_t *p, int32_t steps)
 {
 }
 
@@ -189,7 +186,6 @@ const page_ops_t pg_env_ops = {
     .create = pg_env_create,
     .destroy = pg_env_destroy,
     .on_rotate = pg_env_on_rotate,
-    .on_confirm = pg_env_on_confirm,
     .on_back = pg_env_on_back,
     .on_tick = pg_env_on_tick,
 };

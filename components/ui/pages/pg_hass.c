@@ -28,6 +28,22 @@ typedef struct {
     lv_timer_t *timer;
 } hass_data_t;
 
+static void hass_refresh_focus(hass_data_t *d)
+{
+    for (int i = 0; i < HASS_DEVICE_NUM; i++) {
+        if (i == d->focus) {
+            lv_obj_set_style_border_color(d->tiles[i], lv_color_hex(XK_COLOR_RED), 0);
+            lv_obj_set_style_border_width(d->tiles[i], 2, 0);
+            lv_obj_set_style_bg_color(d->tiles[i], lv_color_hex(XK_COLOR_PANEL), 0);
+            lv_obj_set_style_bg_opa(d->tiles[i], LV_OPA_COVER, 0);
+        } else {
+            lv_obj_set_style_border_width(d->tiles[i], 0, 0);
+            lv_obj_set_style_bg_color(d->tiles[i], lv_color_hex(0x1A1A1A), 0);
+            lv_obj_set_style_bg_opa(d->tiles[i], LV_OPA_COVER, 0);
+        }
+    }
+}
+
 static void hass_enter_control(hass_data_t *d)
 {
     d->in_control = true;
@@ -40,7 +56,7 @@ static void hass_enter_control(hass_data_t *d)
     lv_obj_clear_flag(d->label_last, LV_OBJ_FLAG_HIDDEN);
 
     lv_label_set_text(d->label_name, device_names[d->focus]);
-    lv_label_set_text(d->label_last, "--");
+    lv_label_set_text(d->label_last, "\xE7\x82\xB9\xE5\x87\xBB\x3A ON/OFF");
 
     motor_set_mode(MOTOR_MODE_UNBOUND_NO_DETENTS, 0, 0);
     pm_shake();
@@ -60,16 +76,29 @@ static void hass_exit_control(hass_data_t *d)
     pm_shake();
 }
 
-static void hass_refresh_focus(hass_data_t *d)
+/* 触摸点击设备宫格 → 进入控制视图 */
+static void hass_tile_cb(lv_event_t *e)
 {
-    for (int i = 0; i < HASS_DEVICE_NUM; i++) {
-        if (i == d->focus) {
-            lv_obj_set_style_border_color(d->tiles[i], lv_color_hex(XK_COLOR_RED), 0);
-            lv_obj_set_style_border_width(d->tiles[i], 2, 0);
-        } else {
-            lv_obj_set_style_border_width(d->tiles[i], 0, 0);
-        }
+    lv_obj_t *obj = lv_event_get_current_target(e);
+    page_t *p = (page_t *)lv_obj_get_user_data(obj);
+    hass_data_t *d = p->data;
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    d->focus = idx;
+    hass_refresh_focus(d);
+    hass_enter_control(d);
+}
+
+/* 控制视图: 触摸点击 → ON/OFF */
+static void hass_tap_cb(lv_event_t *e)
+{
+    page_t *p = (page_t *)lv_event_get_user_data(e);
+    hass_data_t *d = p->data;
+    if (!d->in_control) {
+        return;
     }
+    mqtt_ha_publish_cmd(device_names[d->focus], "ON/OFF");
+    lv_label_set_text(d->label_last, "ON/OFF");
+    pm_shake();
 }
 
 static void hass_timer_cb(lv_timer_t *t)
@@ -88,25 +117,29 @@ static void pg_hass_create(page_t *p)
     p->data = d;
     d->focus = 0;
     d->in_control = false;
+    p->title = "\xE6\x99\xBA\xE8\x83\xBD\xE5\xAE\xB6\xE5\xB1\x85";
 
     d->hint = lv_label_create(p->root);
     lv_obj_set_style_text_color(d->hint, lv_color_hex(XK_COLOR_FAINT), 0);
     lv_obj_set_style_text_font(d->hint, &lv_font_msyh_16, 0);
-    lv_label_set_text(d->hint, "\xE6\x85\xA2\xE8\xBD\xAC\xE9\x80\x89\xE6\x8B\xA9 \xC2\xB7 \xE5\xBF\xAB\xE6\x97\x8B\xE6\x8E\xA7\xE5\x88\xB6");
+    lv_label_set_text(d->hint, "\xE7\x82\xB9\xE5\x87\xBB\xE8\xAE\xBE\xE5\xA4\x87 \xC2\xB7 \xE6\x97\x8B\xE8\xBD\xAC\xE6\x8E\xA7\xE5\x88\xB6");
     lv_obj_align(d->hint, LV_ALIGN_BOTTOM_MID, 0, -10);
 
     static const int gx[4] = { 14, 124, 14, 124 };
-    static const int gy[4] = { 60, 60, 190, 190 };
+    static const int gy[4] = { 40, 40, 170, 170 };
     for (int i = 0; i < HASS_DEVICE_NUM; i++) {
         lv_obj_t *tile = lv_obj_create(p->root);
         lv_obj_remove_style_all(tile);
         lv_obj_set_size(tile, 100, 116);
         lv_obj_set_pos(tile, gx[i], gy[i]);
-        lv_obj_set_style_bg_color(tile, lv_color_hex(XK_COLOR_PANEL), 0);
+        lv_obj_set_style_bg_color(tile, lv_color_hex(0x1A1A1A), 0);
         lv_obj_set_style_bg_opa(tile, LV_OPA_COVER, 0);
         lv_obj_set_style_radius(tile, 8, 0);
         lv_obj_set_style_border_color(tile, lv_color_hex(XK_COLOR_RED), 0);
         lv_obj_set_style_border_post(tile, true, 0);
+        lv_obj_add_flag(tile, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_user_data(tile, p);
+        lv_obj_add_event_cb(tile, hass_tile_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
 
         lv_obj_t *icon = lv_label_create(tile);
         lv_obj_set_style_text_color(icon, lv_color_hex(XK_COLOR_TEXT), 0);
@@ -119,7 +152,7 @@ static void pg_hass_create(page_t *p)
     hass_refresh_focus(d);
 
     d->scale = lv_scale_create(p->root);
-    lv_obj_set_pos(d->scale, 0, 50);
+    lv_obj_set_pos(d->scale, 0, 40);
     lv_obj_set_size(d->scale, 240, 240);
     lv_obj_set_style_bg_color(d->scale, lv_color_hex(XK_COLOR_BG), 0);
     lv_obj_set_style_bg_grad_color(d->scale, lv_color_make(64, 0, 64), 0);
@@ -154,16 +187,20 @@ static void pg_hass_create(page_t *p)
     d->label_name = lv_label_create(p->root);
     lv_obj_set_style_text_color(d->label_name, lv_color_hex(XK_COLOR_TEXT), 0);
     lv_obj_set_style_text_font(d->label_name, &lv_font_montserrat_26, 0);
-    lv_obj_align(d->label_name, LV_ALIGN_CENTER, 0, 80);
+    lv_obj_align(d->label_name, LV_ALIGN_CENTER, 0, 70);
     lv_obj_add_flag(d->label_name, LV_OBJ_FLAG_HIDDEN);
 
     d->label_last = lv_label_create(p->root);
     lv_obj_set_style_text_color(d->label_last, lv_color_hex(XK_COLOR_GRAY), 0);
     lv_obj_set_style_text_font(d->label_last, &lv_font_msyh_16, 0);
-    lv_obj_align(d->label_last, LV_ALIGN_CENTER, 0, 130);
+    lv_obj_align(d->label_last, LV_ALIGN_CENTER, 0, 120);
     lv_obj_add_flag(d->label_last, LV_OBJ_FLAG_HIDDEN);
 
     d->timer = lv_timer_create(hass_timer_cb, 50, d);
+
+    /* 控制视图: 整页点击发 ON/OFF */
+    lv_obj_add_flag(p->root, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(p->root, hass_tap_cb, LV_EVENT_CLICKED, p);
 
     motor_set_mode(MOTOR_MODE_COARSE_STRONG_DETENTS, 0, 0);
 }
@@ -178,28 +215,19 @@ static void pg_hass_destroy(page_t *p)
     p->data = NULL;
 }
 
-static void pg_hass_on_rotate(page_t *p, int dir)
+static void pg_hass_on_rotate(page_t *p, int32_t steps)
 {
     hass_data_t *d = p->data;
     if (d->in_control) {
-        mqtt_ha_publish_cmd(device_names[d->focus], dir > 0 ? "RIGHT" : "LEFT");
-        lv_label_set_text(d->label_last, dir > 0 ? "RIGHT" : "LEFT");
+        mqtt_ha_publish_cmd(device_names[d->focus], steps > 0 ? "RIGHT" : "LEFT");
+        lv_label_set_text(d->label_last, steps > 0 ? "RIGHT" : "LEFT");
         pm_shake();
     } else {
-        d->focus = (d->focus + dir + HASS_DEVICE_NUM) % HASS_DEVICE_NUM;
+        d->focus = (d->focus + steps) % HASS_DEVICE_NUM;
+        if (d->focus < 0) {
+            d->focus += HASS_DEVICE_NUM;
+        }
         hass_refresh_focus(d);
-    }
-}
-
-static void pg_hass_on_confirm(page_t *p)
-{
-    hass_data_t *d = p->data;
-    if (d->in_control) {
-        mqtt_ha_publish_cmd(device_names[d->focus], "ON/OFF");
-        lv_label_set_text(d->label_last, "ON/OFF");
-        pm_shake();
-    } else {
-        hass_enter_control(d);
     }
 }
 
@@ -221,7 +249,6 @@ const page_ops_t pg_hass_ops = {
     .create = pg_hass_create,
     .destroy = pg_hass_destroy,
     .on_rotate = pg_hass_on_rotate,
-    .on_confirm = pg_hass_on_confirm,
     .on_back = pg_hass_on_back,
     .on_tick = pg_hass_on_tick,
 };
