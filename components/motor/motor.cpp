@@ -216,6 +216,9 @@ static int shake_strength = 0;
 static int shake_delay = 0;
 static bool shake_active = false;   /* 供命令去重: 正在抖 或 队列已有 SHAKE */
 
+/* 急停开关: motor_disable() 后暂停力反馈与抖动, 直到下一次模式切换 */
+static bool motor_control_enabled = true;
+
 static void (*position_cb)(int32_t position, void *ctx) = NULL;
 static void *position_cb_ctx = NULL;
 static portMUX_TYPE s_cb_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -301,6 +304,8 @@ static void apply_mode_range(motor_mode_t mode, int32_t min_position, int32_t ma
     current_detent_center = motor.shaft_angle;
     angle_to_detent_center = 0;
 
+    motor_control_enabled = true;   /* 模式切换重新使能控制 */
+
     snap_mode = mode;
     snap_position = init_position;
     snap_angle_offset_deg = 0.0f;
@@ -331,12 +336,13 @@ static void apply_set_position(int32_t position)
 
 static void start_shake(int strength, int delay_ms)
 {
-    if (strength <= 0) {
+    if (strength <= 0 || !motor_control_enabled) {
         return;
     }
     if (shake_active) {
         return;   /* 正在抖或已排队, 去重 */
     }
+    motor.move((float)strength);   /* 先施加正脉冲 */
     shake_active = true;
     shake_state = SHAKE_POS;
     shake_remaining = delay_ms;
@@ -371,9 +377,10 @@ static void process_command(const motor_cmd_t *cmd)
         start_shake(cmd->a1, cmd->a2);
         break;
     case MOTOR_CMD_DISABLE:
-        motor.move(0);
+        motor_control_enabled = false;
         shake_state = SHAKE_IDLE;
         shake_active = false;
+        motor.move(0);
         ESP_LOGW(TAG, "motor disabled");
         break;
     default:
@@ -497,7 +504,9 @@ static void motor_task(void *pvParameters)
         motor.loopFOC();
 
         /* 3. 抖动状态机 或 力反馈算法（互斥, 不并行） */
-        if (shake_state != SHAKE_IDLE) {
+        if (!motor_control_enabled) {
+            /* 急停状态: loopFOC 已执行, 但不施加任何目标力矩 */
+        } else if (shake_state != SHAKE_IDLE) {
             if (shake_remaining > 0) {
                 shake_remaining--;
             } else {
