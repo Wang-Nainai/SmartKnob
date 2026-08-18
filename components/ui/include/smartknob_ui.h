@@ -3,4 +3,5 @@
 #include <stdint.h>
 
 void smartknob_ui_init(void);
-void smartknob_ui_set_env(uint16_t co2_ppm, float temp_c, float humidity_pct);
+/* 供页面读取环境数据(数据源为 app_state) */
+void ui_env_get(uint16_t *co2, float *temp, float *rh, uint8_t *has_data);

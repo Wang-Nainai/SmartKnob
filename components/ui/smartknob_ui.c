@@ -15,6 +15,7 @@
 #include "motor.h"
 #include "wifi.h"
 #include "input.h"
+#include "app_state.h"
 
 static const char *TAG = "smartknob_ui";
 
@@ -32,6 +33,7 @@ extern const page_ops_t pg_hass_ops;
 extern const page_ops_t pg_env_ops;
 extern const page_ops_t pg_setting_ops;
 extern const page_ops_t pg_sysinfo_ops;
+extern const page_ops_t pg_factory_ops;
 
 static const page_ops_t *const page_ops_table[PAGE_COUNT] = {
     [PAGE_STARTUP]    = &pg_startup_ops,
@@ -41,6 +43,7 @@ static const page_ops_t *const page_ops_table[PAGE_COUNT] = {
     [PAGE_ENV]        = &pg_env_ops,
     [PAGE_SETTING]    = &pg_setting_ops,
     [PAGE_SYSINFO]    = &pg_sysinfo_ops,
+    [PAGE_FACTORY]    = &pg_factory_ops,
 };
 
 /* ---------------- page stack ---------------- */
@@ -357,7 +360,7 @@ static void refresh_timer_cb(lv_timer_t *t)
 bool ui_nvs_load_i32(const char *key, int32_t *out)
 {
     nvs_handle_t h;
-    if (nvs_open("appcfg", NVS_READONLY, &h) != ESP_OK) {
+    if (nvs_open("webcfg", NVS_READONLY, &h) != ESP_OK) {
         return false;
     }
     esp_err_t err = nvs_get_i32(h, key, out);
@@ -368,7 +371,7 @@ bool ui_nvs_load_i32(const char *key, int32_t *out)
 void ui_nvs_save_i32(const char *key, int32_t value)
 {
     nvs_handle_t h;
-    if (nvs_open("appcfg", NVS_READWRITE, &h) != ESP_OK) {
+    if (nvs_open("webcfg", NVS_READWRITE, &h) != ESP_OK) {
         return;
     }
     nvs_set_i32(h, key, value);
@@ -376,27 +379,16 @@ void ui_nvs_save_i32(const char *key, int32_t value)
     nvs_close(h);
 }
 
-/* ---------------- env data bridge (SCD40 task -> UI, no LVGL in task) ---------------- */
-
-static volatile uint16_t env_co2 = 0;
-static volatile float env_temp = 0.0f;
-static volatile float env_rh = 0.0f;
-static volatile uint8_t env_has_data = 0;
-
-void smartknob_ui_set_env(uint16_t co2_ppm, float temp_c, float humidity_pct)
-{
-    env_co2 = co2_ppm;
-    env_temp = temp_c;
-    env_rh = humidity_pct;
-    env_has_data = 1;
-}
+/* ---------------- env data (来自 app_state, 由 scd40 任务写入) ---------------- */
 
 void ui_env_get(uint16_t *co2, float *temp, float *rh, uint8_t *has_data)
 {
-    *co2 = env_co2;
-    *temp = env_temp;
-    *rh = env_rh;
-    *has_data = env_has_data;
+    app_env_t env;
+    app_state_get_env(&env);
+    *co2 = env.co2_ppm;
+    *temp = env.temperature_c;
+    *rh = env.humidity_pct;
+    *has_data = env.has_data;
 }
 
 /* ---------------- init ---------------- */

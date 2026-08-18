@@ -71,7 +71,8 @@ esp_err_t knob_input_init(void)
         ESP_LOGE(TAG, "failed to create event queue");
         return ESP_ERR_NO_MEM;
     }
-    xTaskCreatePinnedToCore(knob_input_task, "knob_input", 2048, NULL, 1, NULL, 1);
+    /* 钉 core0: motor 独占 core1, input 不与电机抢核 */
+    xTaskCreatePinnedToCore(knob_input_task, "knob_input", 2048, NULL, 1, NULL, 0);
     ESP_LOGI(TAG, "knob input task started (poll=%dms)", CONFIG_KNOB_INPUT_POLL_MS);
     return ESP_OK;
 }

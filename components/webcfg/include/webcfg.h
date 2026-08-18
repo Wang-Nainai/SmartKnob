@@ -22,7 +22,6 @@ typedef void (*webcfg_apply_cb_t)(void);
 void webcfg_set_apply_cb(webcfg_apply_cb_t cb);
 
 /* ---- Runtime status the web page displays ---- */
-void webcfg_set_env(uint16_t co2_ppm, float temp_c, float humidity_pct);
 void webcfg_set_mqtt_connected(bool connected);
 void webcfg_set_ip(const char *ip_str);
 

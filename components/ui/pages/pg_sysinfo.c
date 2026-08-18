@@ -11,8 +11,18 @@
 LV_FONT_DECLARE(lv_font_msyh_16);
 
 typedef struct {
-    lv_obj_t *val[7];
+    lv_obj_t *val[8];
 } sysinfo_data_t;
+
+/* 工厂测试入口点击 → 进入工厂测试页 */
+static void sysinfo_factory_cb(lv_event_t *e)
+{
+    lv_obj_t *obj = lv_event_get_current_target(e);
+    page_t *p = (page_t *)lv_obj_get_user_data(obj);
+    (void)p;
+    pm_push(PAGE_FACTORY);
+    pm_shake();
+}
 
 static void sysinfo_update(sysinfo_data_t *d)
 {
@@ -56,7 +66,7 @@ static void pg_sysinfo_create(page_t *p)
     p->data = d;
     p->title = "\xE7\xB3\xBB\xE7\xBB\x9F";
 
-    static const char *labels[7] = {
+    static const char *labels[8] = {
         "VERSION",
         "IP",
         "MQTT",
@@ -64,10 +74,11 @@ static void pg_sysinfo_create(page_t *p)
         "SCREEN OFF",
         "BUILD",
         "WEB CFG",
+        "\xE5\xB7\xA5\xE5\x8E\x82\xE6\xB5\x8B\xE8\xAF\x95",  /* 工厂测试 */
     };
-    static const int ys[7] = { 40, 76, 112, 148, 184, 220, 256 };
+    static const int ys[8] = { 40, 76, 112, 148, 184, 220, 256, 292 };
 
-    for (int i = 0; i < 7; i++) {
+    for (int i = 0; i < 8; i++) {
         lv_obj_t *l = lv_label_create(p->root);
         lv_obj_set_style_text_color(l, lv_color_hex(XK_COLOR_GRAY), 0);
         lv_obj_set_style_text_font(l, &lv_font_msyh_16, 0);
@@ -81,6 +92,14 @@ static void pg_sysinfo_create(page_t *p)
         lv_obj_align(v, LV_ALIGN_TOP_RIGHT, -14, ys[i]);
         d->val[i] = v;
     }
+
+    /* 工厂测试入口: 整行可触摸 */
+    lv_obj_t *entry = lv_label_create(p->root);
+    lv_obj_set_size(entry, 240, 28);
+    lv_obj_set_pos(entry, 0, ys[7]);
+    lv_obj_add_flag(entry, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_user_data(entry, p);
+    lv_obj_add_event_cb(entry, sysinfo_factory_cb, LV_EVENT_CLICKED, NULL);
 
     sysinfo_update(d);
     motor_set_mode(MOTOR_MODE_UNBOUND_NO_DETENTS, 0, 0);

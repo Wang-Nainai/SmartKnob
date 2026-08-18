@@ -11,6 +11,7 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "webcfg.h"
+#include "app_state.h"
 
 static const char *TAG = "webcfg";
 
@@ -20,9 +21,6 @@ static const char *TAG = "webcfg";
 static webcfg_apply_cb_t s_apply_cb = NULL;
 static httpd_handle_t s_server = NULL;
 
-static volatile uint16_t s_co2 = 0;
-static volatile float s_temp = 0.0f;
-static volatile float s_rh = 0.0f;
 static volatile bool s_mqtt = false;
 static char s_ip[16] = "0.0.0.0";
 
@@ -68,13 +66,6 @@ void webcfg_erase_all(void)
 }
 
 /* ---------------- runtime status ---------------- */
-
-void webcfg_set_env(uint16_t co2_ppm, float temp_c, float humidity_pct)
-{
-    s_co2 = co2_ppm;
-    s_temp = temp_c;
-    s_rh = humidity_pct;
-}
 
 void webcfg_set_mqtt_connected(bool connected)
 {
@@ -173,6 +164,8 @@ static esp_err_t handler_status(httpd_req_t *req)
     webcfg_get_str("mqtt_uri", mqtt_uri, sizeof(mqtt_uri), "");
     webcfg_get_str("mqtt_user", mqtt_user, sizeof(mqtt_user), "");
     webcfg_get_str("mqtt_pass", mqtt_pass, sizeof(mqtt_pass), "");
+    app_env_t env;
+    app_state_get_env(&env);
     int n = snprintf(buf, sizeof(buf),
                      "{\"ip\":\"%s\",\"ssid\":\"%s\",\"mqtt_uri\":\"%s\",\"mqtt_user\":\"%s\",\"mqtt_pass\":\"%s\","
                      "\"wifi\":%s,\"mqtt\":%s,\"co2\":%u,\"temp\":%.1f,\"rh\":%.1f,"
@@ -180,7 +173,7 @@ static esp_err_t handler_status(httpd_req_t *req)
                      s_ip, ssid, mqtt_uri, mqtt_user, mqtt_pass,
                      strcmp(s_ip, "0.0.0.0") == 0 ? "false" : "true",
                      s_mqtt ? "true" : "false",
-                     s_co2, s_temp, s_rh,
+                     env.co2_ppm, env.temperature_c, env.humidity_pct,
                      app->version,
                      (unsigned int)(uptime_s / 86400), (unsigned int)((uptime_s % 86400) / 3600),
                      (unsigned int)((uptime_s % 3600) / 60));

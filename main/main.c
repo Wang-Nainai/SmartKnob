@@ -13,6 +13,7 @@
 #include "motor.h"
 #include "webcfg.h"
 #include "input.h"
+#include "app_state.h"
 
 static const char *TAG = "SmartKnob";
 
@@ -41,8 +42,7 @@ static void scd40_task(void *arg)
         if (scd40_read(&data) == ESP_OK) {
             ESP_LOGI(TAG, "CO2=%u ppm, T=%.1f C, RH=%.1f %%",
                      data.co2_ppm, data.temperature_c, data.humidity_pct);
-            smartknob_ui_set_env(data.co2_ppm, data.temperature_c, data.humidity_pct);
-            webcfg_set_env(data.co2_ppm, data.temperature_c, data.humidity_pct);
+            app_state_set_env(data.co2_ppm, data.temperature_c, data.humidity_pct);
             mqtt_ha_publish(data.co2_ppm, data.temperature_c, data.humidity_pct);
         }
     }
@@ -78,6 +78,7 @@ void app_main(void)
 {
     ESP_LOGI(TAG, "SmartKnob starting...");
 
+    app_state_init();
     led_init();
     display_init();
 
@@ -104,7 +105,7 @@ void app_main(void)
         } else {
             ESP_LOGE(TAG, "SCD40 failed to start measurement, err=0x%X", start_err);
         }
-        xTaskCreate(scd40_task, "scd40", 4096, NULL, 3, NULL);
+        xTaskCreatePinnedToCore(scd40_task, "scd40", 4096, NULL, 3, NULL, 0);
     } else {
         ESP_LOGE(TAG, "SCD40 init failed");
     }
