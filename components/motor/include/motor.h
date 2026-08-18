@@ -37,6 +37,7 @@ int32_t motor_get_position(void);
 bool motor_is_ready(void);
 void motor_set_position_cb(void (*cb)(int32_t position, void *ctx), void *ctx);
 void motor_shake(int strength, int delay_ms);
+void motor_disable(void);
 int motor_get_mode_count(void);
 const char *motor_mode_name(int mode);
 float motor_get_angle_offset_deg(void);

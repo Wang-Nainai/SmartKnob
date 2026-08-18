@@ -63,7 +63,7 @@ static void env_timer_cb(lv_timer_t *t)
         lv_label_set_text(d->label_level, env_level_name(d->co2));
         lv_obj_set_style_text_color(d->label_level, lv_color_hex(env_level_color(d->co2)), 0);
 
-        snprintf(buf, sizeof(buf), "\xE6\xB8\xA9\xE5\xBA\xA6 %.1f\xC2\xB0C    \xE6\xB9\xBF\xE5\xBA\xA6 %.0f%%",
+        snprintf(buf, sizeof(buf), "\xE6\xB8\xA9\xE5\xBA\xA6 %.1f\xB0" "C    \xE6\xB9\xBF\xE5\xBA\xA6 %.0f%%",
                  d->temp, d->rh);
         lv_label_set_text(d->label_sub, buf);
     } else {

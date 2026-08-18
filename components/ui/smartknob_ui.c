@@ -138,7 +138,6 @@ void pm_push(page_id_t id)
     if (pm_depth >= PM_MAX_DEPTH) {
         return;
     }
-    page_t *old = pm_top();
     page_t *p = pm_create_page(id);
     if (!p) {
         return;

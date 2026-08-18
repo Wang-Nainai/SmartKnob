@@ -3,6 +3,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 #include "esp_simplefoc.h"
 #include "i2c_bus.h"
 #include <math.h>
@@ -13,6 +14,39 @@
 #endif
 
 static const char *TAG = "motor";
+
+/* ============================================================================
+ * Phase 1 架构：单任务独占 BLDC 电机
+ * ----------------------------------------------------------------------------
+ * 规则：只有 motor_task 可以调用 BLDCMotor / BLDCDriver / Encoder /
+ *       loopFOC() / move()。
+ * 其它任务（LVGL/UI/MQTT/Web/SCD40）只能通过 motor_cmd_queue 投递命令，
+ * 通过 volatile 快照读取状态。消除此前 motor_shake / motor_set_mode
+ * 从 LVGL 线程直接操作 BLDCMotor 造成的竞态。
+ * ==========================================================================*/
+
+/* ---------------- 命令队列 ---------------- */
+
+typedef enum {
+    MOTOR_CMD_SET_MODE,        /* a1=mode  a2=num_positions(0=表默认)  a3=init_position */
+    MOTOR_CMD_SET_MODE_RANGE,  /* a1=mode  a2=min_position  a3=max_position  a4=init_position */
+    MOTOR_CMD_SET_POSITION,    /* a1=position */
+    MOTOR_CMD_SHAKE,           /* a1=strength  a2=delay_ms */
+    MOTOR_CMD_DISABLE,         /* 紧急停: move(0) 并暂停力反馈 */
+} motor_cmd_type_t;
+
+typedef struct {
+    motor_cmd_type_t type;
+    int32_t a1;
+    int32_t a2;
+    int32_t a3;
+    int32_t a4;
+} motor_cmd_t;
+
+#define MOTOR_CMD_QUEUE_LEN 8
+static QueueHandle_t s_cmd_queue = NULL;
+
+/* ---------------- 硬件对象（仅 motor_task 访问） ---------------- */
 
 #if CONFIG_MOTOR_MT6701_INTERFACE_ABZ
 static Encoder sensor = Encoder(CONFIG_MOTOR_MT6701_ABZ_A_PIN, CONFIG_MOTOR_MT6701_ABZ_B_PIN,
@@ -37,7 +71,8 @@ static BLDCDriver3PWM driver = BLDCDriver3PWM(CONFIG_MOTOR_PWM_A, CONFIG_MOTOR_P
                                               CONFIG_MOTOR_PWM_C, CONFIG_MOTOR_EN_PIN);
 static BLDCMotor motor = BLDCMotor(CONFIG_MOTOR_POLE_PAIRS);
 
-/* Ported from X-Knob-1.3.1 / vendor 11-mode knob (scottbez1 smartknob motor_task.cpp) */
+/* ---------------- 力反馈模式表（scottbez1 smartknob / X-Knob 移植） ---------------- */
+
 typedef struct {
     int32_t position;
     int32_t min_position;
@@ -54,69 +89,79 @@ typedef struct {
 
 static const knob_config_t knob_configs[MOTOR_MODE_COUNT] = {
     [MOTOR_MODE_UNBOUND_NO_DETENTS] = {
+        .position = 0,
         .min_position = 0, .max_position = -1,
         .position_width_radians = 10 * _PI / 180,
         .detent_strength_unit = 0, .endstop_strength_unit = 1,
         .snap_point = 1.1, .snap_point_bias = 0,
-        .detent_positions_count = 0, .text = "无边界和制动",
+        .detent_positions_count = 0, .detent_positions = {0}, .text = "无边界和制动",
     },
     [MOTOR_MODE_BOUND_NO_DETENTS] = {
+        .position = 0,
         .min_position = 0, .max_position = 10,
         .position_width_radians = 10 * _PI / 180,
         .detent_strength_unit = 0, .endstop_strength_unit = 1,
         .snap_point = 1.1, .snap_point_bias = 0,
-        .detent_positions_count = 0, .text = "有边界无制动",
+        .detent_positions_count = 0, .detent_positions = {0}, .text = "有边界无制动",
     },
     [MOTOR_MODE_MULTI_TURN_NO_DETENTS] = {
+        .position = 0,
         .min_position = 0, .max_position = 72,
         .position_width_radians = 10 * _PI / 180,
         .detent_strength_unit = 0, .endstop_strength_unit = 1,
         .snap_point = 1.1, .snap_point_bias = 0,
-        .detent_positions_count = 0, .text = "多圈无制动",
+        .detent_positions_count = 0, .detent_positions = {0}, .text = "多圈无制动",
     },
     [MOTOR_MODE_ON_OFF] = {
+        .position = 0,
         .min_position = 0, .max_position = 1,
         .position_width_radians = 60 * _PI / 180,
         .detent_strength_unit = 1, .endstop_strength_unit = 1,
         .snap_point = 0.55, .snap_point_bias = 0,
-        .detent_positions_count = 0, .text = "开关模式",
+        .detent_positions_count = 0, .detent_positions = {0}, .text = "开关模式",
     },
     [MOTOR_MODE_AUTO_RETURN_CENTER] = {
+        .position = 0,
         .min_position = 0, .max_position = 0,
         .position_width_radians = 60 * _PI / 180,
         .detent_strength_unit = 0.01, .endstop_strength_unit = 0.6,
         .snap_point = 1.1, .snap_point_bias = 0,
-        .detent_positions_count = 0, .text = "自动回中",
+        .detent_positions_count = 0, .detent_positions = {0}, .text = "自动回中",
     },
     [MOTOR_MODE_FINE_NO_DETENTS] = {
+        .position = 0,
         .min_position = 0, .max_position = 255,
         .position_width_radians = 1 * _PI / 180,
         .detent_strength_unit = 0, .endstop_strength_unit = 1,
         .snap_point = 1.1, .snap_point_bias = 0,
-        .detent_positions_count = 0, .text = "精细无制动",
+        .detent_positions_count = 0, .detent_positions = {0}, .text = "精细无制动",
     },
     [MOTOR_MODE_FINE_DETENTS] = {
+        .position = 0,
         .min_position = 0, .max_position = 255,
         .position_width_radians = 1 * _PI / 180,
         .detent_strength_unit = 1, .endstop_strength_unit = 1,
         .snap_point = 1.1, .snap_point_bias = 0,
-        .detent_positions_count = 0, .text = "精细有制动",
+        .detent_positions_count = 0, .detent_positions = {0}, .text = "精细有制动",
     },
     [MOTOR_MODE_COARSE_STRONG_DETENTS] = {
+        .position = 0,
         .min_position = 0, .max_position = 31,
         .position_width_radians = 8.225806452f * _PI / 180,
         .detent_strength_unit = 2, .endstop_strength_unit = 1,
         .snap_point = 1.1, .snap_point_bias = 0,
-        .detent_positions_count = 0, .text = "粗略强制动",
+        .detent_positions_count = 0, .detent_positions = {0}, .text = "粗略强制动",
     },
     [MOTOR_MODE_COARSE_WEAK_DETENTS] = {
+        .position = 0,
         .min_position = 0, .max_position = 31,
         .position_width_radians = 8.225806452f * _PI / 180,
         .detent_strength_unit = 0.2, .endstop_strength_unit = 1,
         .snap_point = 1.1, .snap_point_bias = 0,
-        .detent_positions_count = 0, .text = "粗略弱制动",
+        .detent_positions_count = 0, .detent_positions = {0}, .text = "粗略弱制动",
     },
     [MOTOR_MODE_MAGNETIC_DETENTS] = {
+        .position = 0,
         .min_position = 0, .max_position = 31,
         .position_width_radians = 7 * _PI / 180,
         .detent_strength_unit = 2.5, .endstop_strength_unit = 1,
@@ -125,21 +170,29 @@ static const knob_config_t knob_configs[MOTOR_MODE_COUNT] = {
         .text = "磁性制动",
     },
     [MOTOR_MODE_RETURN_CENTER_WITH_DETENTS] = {
+        .position = 0,
         .min_position = -6, .max_position = 6,
         .position_width_radians = 60 * _PI / 180,
         .detent_strength_unit = 1, .endstop_strength_unit = 1,
         .snap_point = 0.55, .snap_point_bias = 0.4,
-        .detent_positions_count = 0, .text = "回中带制动",
+        .detent_positions_count = 0, .detent_positions = {0}, .text = "回中带制动",
     },
 };
 
-static knob_config_t motor_config;
-static motor_mode_t current_mode = MOTOR_MODE_COARSE_STRONG_DETENTS;
-static float current_detent_center = 0;
-static float angle_to_detent_center = 0;
-static bool motor_ready_flag = false;
-static bool motor_shaking = false;
+/* ---------------- 控制状态（仅 motor_task 写，跨任务只读快照） ---------------- */
 
+static knob_config_t motor_config;            /* 当前生效配置, 仅 motor_task 访问 */
+static motor_mode_t current_mode = MOTOR_MODE_COARSE_STRONG_DETENTS;
+static float current_detent_center = 0;       /* 仅 motor_task */
+static float angle_to_detent_center = 0;      /* 仅 motor_task */
+
+/* 跨任务只读快照: 单字对齐访问, Xtensa 上原子, 由 motor_task 更新 */
+static volatile int32_t snap_position = 0;
+static volatile int32_t snap_mode = MOTOR_MODE_COARSE_STRONG_DETENTS;
+static volatile float snap_angle_offset_deg = 0.0f;
+static volatile bool snap_ready = false;
+
+/* 力反馈算法常量（scottbez1 smartknob） */
 static const float DEAD_ZONE_DETENT_PERCENT = 0.2;
 static const float DEAD_ZONE_RAD = 1 * _PI / 180;
 static const float IDLE_VELOCITY_EWMA_ALPHA = 0.001;
@@ -151,22 +204,47 @@ static const float IDLE_CORRECTION_RATE_ALPHA = 0.0005;
 static float idle_check_velocity_ewma = 0;
 static uint32_t last_idle_start = 0;
 
+/* shake 状态机（仅 motor_task 访问） */
+typedef enum {
+    SHAKE_IDLE,
+    SHAKE_POS,
+    SHAKE_NEG,
+} shake_state_t;
+static shake_state_t shake_state = SHAKE_IDLE;
+static int shake_remaining = 0;
+static int shake_strength = 0;
+static int shake_delay = 0;
+static bool shake_active = false;   /* 供命令去重: 正在抖 或 队列已有 SHAKE */
+
 static void (*position_cb)(int32_t position, void *ctx) = NULL;
 static void *position_cb_ctx = NULL;
+static portMUX_TYPE s_cb_mux = portMUX_INITIALIZER_UNLOCKED;
 
 static float CLAMP(float value, float low, float high)
 {
     return value < low ? low : (value > high ? high : value);
 }
 
+/* ---------------- 跨任务只读接口 ---------------- */
+
 bool motor_is_ready(void)
 {
-    return motor_ready_flag;
+    return snap_ready;
 }
 
 int32_t motor_get_position(void)
 {
-    return motor_config.position;
+    return snap_position;
+}
+
+motor_mode_t motor_get_mode(void)
+{
+    return (motor_mode_t)snap_mode;
+}
+
+float motor_get_angle_offset_deg(void)
+{
+    return snap_angle_offset_deg;
 }
 
 int motor_get_mode_count(void)
@@ -182,7 +260,55 @@ const char *motor_mode_name(int mode)
     return knob_configs[mode].text;
 }
 
-void motor_set_position(int32_t position)
+/* ---------------- 命令投递（任意任务可调用, 非阻塞） ---------------- */
+
+static void post_cmd(motor_cmd_t cmd)
+{
+    if (!s_cmd_queue) {
+        return;
+    }
+    if (xQueueSend(s_cmd_queue, &cmd, pdMS_TO_TICKS(20)) != pdTRUE) {
+        ESP_LOGW(TAG, "motor cmd queue full, dropping type=%d", cmd.type);
+    }
+}
+
+/* 发布位置变化（仅 motor_task 调用） */
+static void publish_position(int32_t pos)
+{
+    void (*cb)(int32_t, void *) = NULL;
+    void *ctx = NULL;
+    portENTER_CRITICAL(&s_cb_mux);
+    cb = position_cb;
+    ctx = position_cb_ctx;
+    portEXIT_CRITICAL(&s_cb_mux);
+    if (cb) {
+        cb(pos, ctx);
+    }
+}
+
+/* ---------------- 命令执行（仅 motor_task 调用） ---------------- */
+
+static void apply_mode_range(motor_mode_t mode, int32_t min_position, int32_t max_position,
+                             int32_t init_position)
+{
+    knob_config_t cfg = knob_configs[mode];
+    cfg.min_position = min_position;
+    cfg.max_position = max_position;
+    cfg.position = init_position;
+
+    motor_config = cfg;
+    current_mode = mode;
+    current_detent_center = motor.shaft_angle;
+    angle_to_detent_center = 0;
+
+    snap_mode = mode;
+    snap_position = init_position;
+    snap_angle_offset_deg = 0.0f;
+
+    ESP_LOGI(TAG, "mode=%d range=[%d..%d] pos=%d", mode, min_position, max_position, init_position);
+}
+
+static void apply_set_position(int32_t position)
 {
     knob_config_t cfg = motor_config;
     int32_t num_positions = cfg.max_position - cfg.min_position + 1;
@@ -198,175 +324,202 @@ void motor_set_position(int32_t position)
     motor_config = cfg;
     current_detent_center = motor.shaft_angle;
     angle_to_detent_center = 0;
+    snap_position = position;
+    snap_angle_offset_deg = 0.0f;
+    publish_position(position);
 }
 
-void motor_set_mode_range(motor_mode_t mode, int32_t min_position, int32_t max_position,
-                          int32_t init_position)
+static void start_shake(int strength, int delay_ms)
 {
-    knob_config_t cfg = knob_configs[mode];
-    cfg.min_position = min_position;
-    cfg.max_position = max_position;
-    cfg.position = init_position;
-
-    motor_config = cfg;
-    current_mode = mode;
-    current_detent_center = motor.shaft_angle;
-    angle_to_detent_center = 0;
-    ESP_LOGI(TAG, "mode=%d range=[%d..%d] pos=%d", mode, min_position, max_position, init_position);
-}
-
-void motor_set_mode(motor_mode_t mode, int32_t num_positions, int32_t init_position)
-{
-    const knob_config_t *base = &knob_configs[mode];
-    if (num_positions > 0) {
-        motor_set_mode_range(mode, base->min_position, base->min_position + num_positions - 1,
-                             init_position);
-    } else {
-        motor_set_mode_range(mode, base->min_position, base->max_position, init_position);
-    }
-}
-
-motor_mode_t motor_get_mode(void)
-{
-    return current_mode;
-}
-
-float motor_get_angle_offset_deg(void)
-{
-    return angle_to_detent_center * 180.0f / _PI;
-}
-
-void motor_set_position_cb(void (*cb)(int32_t position, void *ctx), void *ctx)
-{
-    position_cb = cb;
-    position_cb_ctx = ctx;
-}
-
-void motor_shake(int strength, int delay_ms)
-{
-    if (!motor_ready_flag || motor_shaking) {
+    if (strength <= 0) {
         return;
     }
-    motor_shaking = true;
-    motor.move(strength);
-    for (int i = 0; i < delay_ms; i++) {
-        motor.loopFOC();
-        vTaskDelay(pdMS_TO_TICKS(1));
+    if (shake_active) {
+        return;   /* 正在抖或已排队, 去重 */
     }
-    motor.move(-strength);
-    for (int i = 0; i < delay_ms; i++) {
-        motor.loopFOC();
-        vTaskDelay(pdMS_TO_TICKS(1));
-    }
-    motor.move(0);
-    motor.loopFOC();
-    motor_shaking = false;
+    shake_active = true;
+    shake_state = SHAKE_POS;
+    shake_remaining = delay_ms;
+    shake_strength = strength;
+    shake_delay = delay_ms;
+    /* 抖动期间暂停怠速检测, 避免误判 */
+    last_idle_start = 0;
+    idle_check_velocity_ewma = 0;
 }
+
+static void process_command(const motor_cmd_t *cmd)
+{
+    switch (cmd->type) {
+    case MOTOR_CMD_SET_MODE: {
+        const knob_config_t *base = &knob_configs[cmd->a1];
+        if (cmd->a2 > 0) {
+            apply_mode_range((motor_mode_t)cmd->a1, base->min_position,
+                             base->min_position + cmd->a2 - 1, cmd->a3);
+        } else {
+            apply_mode_range((motor_mode_t)cmd->a1, base->min_position, base->max_position,
+                             cmd->a3);
+        }
+        break;
+    }
+    case MOTOR_CMD_SET_MODE_RANGE:
+        apply_mode_range((motor_mode_t)cmd->a1, cmd->a2, cmd->a3, cmd->a4);
+        break;
+    case MOTOR_CMD_SET_POSITION:
+        apply_set_position(cmd->a1);
+        break;
+    case MOTOR_CMD_SHAKE:
+        start_shake(cmd->a1, cmd->a2);
+        break;
+    case MOTOR_CMD_DISABLE:
+        motor.move(0);
+        shake_state = SHAKE_IDLE;
+        shake_active = false;
+        ESP_LOGW(TAG, "motor disabled");
+        break;
+    default:
+        break;
+    }
+}
+
+/* ---------------- 力反馈算法（仅 motor_task 调用） ---------------- */
+
+static void haptic_update(void)
+{
+    idle_check_velocity_ewma = motor.shaft_velocity * IDLE_VELOCITY_EWMA_ALPHA
+                               + idle_check_velocity_ewma * (1 - IDLE_VELOCITY_EWMA_ALPHA);
+    if (fabsf(idle_check_velocity_ewma) > IDLE_VELOCITY_RAD_PER_SEC) {
+        last_idle_start = 0;
+    } else if (last_idle_start == 0) {
+        last_idle_start = esp_timer_get_time() / 1000;
+    }
+
+    if (last_idle_start > 0
+            && (esp_timer_get_time() / 1000) - last_idle_start > IDLE_CORRECTION_DELAY_MILLIS
+            && fabsf(motor.shaft_angle - current_detent_center) < IDLE_CORRECTION_MAX_ANGLE_RAD) {
+        current_detent_center = motor.shaft_angle * IDLE_CORRECTION_RATE_ALPHA
+                                + current_detent_center * (1 - IDLE_CORRECTION_RATE_ALPHA);
+    }
+
+    knob_config_t cfg = motor_config;
+    angle_to_detent_center = motor.shaft_angle - current_detent_center;
+
+    float snap_point_radians = cfg.position_width_radians * cfg.snap_point;
+    float bias_radians = cfg.position_width_radians * cfg.snap_point_bias;
+    float snap_decrease = snap_point_radians
+                          + (cfg.position <= 0 ? bias_radians : -bias_radians);
+    float snap_increase = -snap_point_radians
+                          + (cfg.position >= 0 ? -bias_radians : bias_radians);
+
+    int32_t num_positions = cfg.max_position - cfg.min_position + 1;
+    if (angle_to_detent_center > snap_decrease
+            && (num_positions <= 0 || cfg.position > cfg.min_position)) {
+        current_detent_center += cfg.position_width_radians;
+        angle_to_detent_center -= cfg.position_width_radians;
+        cfg.position--;
+    } else if (angle_to_detent_center < snap_increase
+               && (num_positions <= 0 || cfg.position < cfg.max_position)) {
+        current_detent_center -= cfg.position_width_radians;
+        angle_to_detent_center += cfg.position_width_radians;
+        cfg.position++;
+    }
+    motor_config = cfg;
+
+    float dead_zone_adjustment = CLAMP(
+        angle_to_detent_center,
+        fmaxf(-cfg.position_width_radians * DEAD_ZONE_DETENT_PERCENT, -DEAD_ZONE_RAD),
+        fminf(cfg.position_width_radians * DEAD_ZONE_DETENT_PERCENT, DEAD_ZONE_RAD));
+
+    bool out_of_bounds = num_positions > 0
+                         && ((angle_to_detent_center > 0 && cfg.position == cfg.min_position)
+                             || (angle_to_detent_center < 0 && cfg.position == cfg.max_position));
+    motor.PID_velocity.limit = 10;
+    motor.PID_velocity.P = out_of_bounds ? cfg.endstop_strength_unit * 4
+                          : cfg.detent_strength_unit * 4;
+
+    /* D factor scales with detent width (scottbez1 smartknob style) */
+    const float derivative_lower_strength = cfg.detent_strength_unit * 0.08f;
+    const float derivative_upper_strength = cfg.detent_strength_unit * 0.02f;
+    const float derivative_position_width_lower = 3 * _PI / 180;
+    const float derivative_position_width_upper = 8 * _PI / 180;
+    const float raw = derivative_lower_strength
+                      + (derivative_upper_strength - derivative_lower_strength)
+                        / (derivative_position_width_upper - derivative_position_width_lower)
+                        * (cfg.position_width_radians - derivative_position_width_lower);
+    motor.PID_velocity.D = CLAMP(raw,
+                                 fminf(derivative_lower_strength, derivative_upper_strength),
+                                 fmaxf(derivative_lower_strength, derivative_upper_strength));
+
+    if (fabsf(motor.shaft_velocity) > 60) {
+        motor.move(0);
+    } else {
+        float input = -angle_to_detent_center + dead_zone_adjustment;
+        if (!out_of_bounds && cfg.detent_positions_count > 0) {
+            bool in_detent = false;
+            for (uint32_t i = 0; i < cfg.detent_positions_count; i++) {
+                if (cfg.detent_positions[i] == cfg.position) {
+                    in_detent = true;
+                    break;
+                }
+            }
+            if (!in_detent) {
+                input = 0;
+            }
+        }
+        float torque = motor.PID_velocity(input);
+        motor.move(torque);
+    }
+
+    /* 更新跨任务快照 + 回调 */
+    snap_position = cfg.position;
+    snap_angle_offset_deg = angle_to_detent_center * 180.0f / _PI;
+
+    static int32_t last_published = 0;
+    if (cfg.position != last_published) {
+        last_published = cfg.position;
+        publish_position(cfg.position);
+    }
+}
+
+/* ---------------- 电机主任务（唯一允许触碰 BLDC 硬件的任务） ---------------- */
 
 static void motor_task(void *pvParameters)
 {
     current_detent_center = motor.shaft_angle;
-    int32_t last_published = motor_config.position;
 
     while (1) {
+        /* 1. 排空命令队列（非阻塞） */
+        motor_cmd_t cmd;
+        while (xQueueReceive(s_cmd_queue, &cmd, 0) == pdTRUE) {
+            process_command(&cmd);
+        }
+
+        /* 2. FOC 电流环: 每周期都必须执行 */
         motor.loopFOC();
 
-        if (!motor_shaking) {
-            idle_check_velocity_ewma = motor.shaft_velocity * IDLE_VELOCITY_EWMA_ALPHA
-                                       + idle_check_velocity_ewma * (1 - IDLE_VELOCITY_EWMA_ALPHA);
-            if (fabsf(idle_check_velocity_ewma) > IDLE_VELOCITY_RAD_PER_SEC) {
-                last_idle_start = 0;
-            } else if (last_idle_start == 0) {
-                last_idle_start = esp_timer_get_time() / 1000;
-            }
-
-            if (last_idle_start > 0
-                    && (esp_timer_get_time() / 1000) - last_idle_start > IDLE_CORRECTION_DELAY_MILLIS
-                    && fabsf(motor.shaft_angle - current_detent_center) < IDLE_CORRECTION_MAX_ANGLE_RAD) {
-                current_detent_center = motor.shaft_angle * IDLE_CORRECTION_RATE_ALPHA
-                                        + current_detent_center * (1 - IDLE_CORRECTION_RATE_ALPHA);
-            }
-
-            knob_config_t cfg = motor_config;
-            angle_to_detent_center = motor.shaft_angle - current_detent_center;
-
-            float snap_point_radians = cfg.position_width_radians * cfg.snap_point;
-            float bias_radians = cfg.position_width_radians * cfg.snap_point_bias;
-            float snap_decrease = snap_point_radians
-                                  + (cfg.position <= 0 ? bias_radians : -bias_radians);
-            float snap_increase = -snap_point_radians
-                                  + (cfg.position >= 0 ? -bias_radians : bias_radians);
-
-            int32_t num_positions = cfg.max_position - cfg.min_position + 1;
-            if (angle_to_detent_center > snap_decrease
-                    && (num_positions <= 0 || cfg.position > cfg.min_position)) {
-                current_detent_center += cfg.position_width_radians;
-                angle_to_detent_center -= cfg.position_width_radians;
-                cfg.position--;
-            } else if (angle_to_detent_center < snap_increase
-                       && (num_positions <= 0 || cfg.position < cfg.max_position)) {
-                current_detent_center -= cfg.position_width_radians;
-                angle_to_detent_center += cfg.position_width_radians;
-                cfg.position++;
-            }
-            motor_config = cfg;
-
-            float dead_zone_adjustment = CLAMP(
-                angle_to_detent_center,
-                fmaxf(-cfg.position_width_radians * DEAD_ZONE_DETENT_PERCENT, -DEAD_ZONE_RAD),
-                fminf(cfg.position_width_radians * DEAD_ZONE_DETENT_PERCENT, DEAD_ZONE_RAD));
-
-            bool out_of_bounds = num_positions > 0
-                                 && ((angle_to_detent_center > 0 && cfg.position == cfg.min_position)
-                                     || (angle_to_detent_center < 0 && cfg.position == cfg.max_position));
-            motor.PID_velocity.limit = 10;
-            motor.PID_velocity.P = out_of_bounds ? cfg.endstop_strength_unit * 4
-                                  : cfg.detent_strength_unit * 4;
-
-            /* D factor scales with detent width (scottbez1 smartknob style) */
-            const float derivative_lower_strength = cfg.detent_strength_unit * 0.08f;
-            const float derivative_upper_strength = cfg.detent_strength_unit * 0.02f;
-            const float derivative_position_width_lower = 3 * _PI / 180;
-            const float derivative_position_width_upper = 8 * _PI / 180;
-            const float raw = derivative_lower_strength
-                              + (derivative_upper_strength - derivative_lower_strength)
-                                / (derivative_position_width_upper - derivative_position_width_lower)
-                                * (cfg.position_width_radians - derivative_position_width_lower);
-            motor.PID_velocity.D = CLAMP(raw,
-                                         fminf(derivative_lower_strength, derivative_upper_strength),
-                                         fmaxf(derivative_lower_strength, derivative_upper_strength));
-
-            if (fabsf(motor.shaft_velocity) > 60) {
-                motor.move(0);
+        /* 3. 抖动状态机 或 力反馈算法（互斥, 不并行） */
+        if (shake_state != SHAKE_IDLE) {
+            if (shake_remaining > 0) {
+                shake_remaining--;
             } else {
-                float input = -angle_to_detent_center + dead_zone_adjustment;
-                if (!out_of_bounds && cfg.detent_positions_count > 0) {
-                    bool in_detent = false;
-                    for (uint32_t i = 0; i < cfg.detent_positions_count; i++) {
-                        if (cfg.detent_positions[i] == cfg.position) {
-                            in_detent = true;
-                            break;
-                        }
-                    }
-                    if (!in_detent) {
-                        input = 0;
-                    }
-                }
-                float torque = motor.PID_velocity(input);
-                motor.move(torque);
-            }
-
-            if (cfg.position != last_published) {
-                last_published = cfg.position;
-                if (position_cb) {
-                    position_cb(cfg.position, position_cb_ctx);
+                if (shake_state == SHAKE_POS) {
+                    shake_state = SHAKE_NEG;
+                    shake_remaining = shake_delay;
+                    motor.move(-shake_strength);
+                } else {
+                    shake_state = SHAKE_IDLE;
+                    shake_active = false;
+                    motor.move(0);
                 }
             }
+        } else {
+            haptic_update();
         }
 
         vTaskDelay(pdMS_TO_TICKS(1));
     }
 }
+
+/* ---------------- 公共 API ---------------- */
 
 esp_err_t motor_init(void)
 {
@@ -440,9 +593,70 @@ esp_err_t motor_init(void)
 
     motor_config = knob_configs[MOTOR_MODE_COARSE_STRONG_DETENTS];
     current_detent_center = motor.shaft_angle;
-    motor_ready_flag = true;
+    snap_position = 0;
+    snap_mode = MOTOR_MODE_COARSE_STRONG_DETENTS;
+    snap_angle_offset_deg = 0.0f;
+    snap_ready = true;
     ESP_LOGI(TAG, "motor ready, angle=%.2f", motor.shaft_angle);
+
+    /* 命令队列必须在任务启动前创建 */
+    s_cmd_queue = xQueueCreate(MOTOR_CMD_QUEUE_LEN, sizeof(motor_cmd_t));
+    if (!s_cmd_queue) {
+        ESP_LOGE(TAG, "failed to create cmd queue");
+        snap_ready = false;
+        return ESP_ERR_NO_MEM;
+    }
 
     xTaskCreatePinnedToCore(motor_task, "motor", 4096, NULL, 2, NULL, CONFIG_MOTOR_TASK_CORE);
     return ESP_OK;
+}
+
+void motor_set_mode(motor_mode_t mode, int32_t num_positions, int32_t init_position)
+{
+    if (mode < 0 || mode >= MOTOR_MODE_COUNT) {
+        return;
+    }
+    motor_cmd_t cmd = { .type = MOTOR_CMD_SET_MODE, .a1 = mode, .a2 = num_positions,
+                        .a3 = init_position, .a4 = 0 };
+    post_cmd(cmd);
+}
+
+void motor_set_mode_range(motor_mode_t mode, int32_t min_position, int32_t max_position,
+                          int32_t init_position)
+{
+    if (mode < 0 || mode >= MOTOR_MODE_COUNT) {
+        return;
+    }
+    motor_cmd_t cmd = { .type = MOTOR_CMD_SET_MODE_RANGE, .a1 = mode, .a2 = min_position,
+                        .a3 = max_position, .a4 = init_position };
+    post_cmd(cmd);
+}
+
+void motor_set_position(int32_t position)
+{
+    motor_cmd_t cmd = { .type = MOTOR_CMD_SET_POSITION, .a1 = position, .a2 = 0,
+                        .a3 = 0, .a4 = 0 };
+    post_cmd(cmd);
+}
+
+void motor_set_position_cb(void (*cb)(int32_t position, void *ctx), void *ctx)
+{
+    /* 回调由 motor_task 调用; 注册通常在初始化期单次完成, 用临界区保护写 */
+    portENTER_CRITICAL(&s_cb_mux);
+    position_cb = cb;
+    position_cb_ctx = ctx;
+    portEXIT_CRITICAL(&s_cb_mux);
+}
+
+void motor_shake(int strength, int delay_ms)
+{
+    motor_cmd_t cmd = { .type = MOTOR_CMD_SHAKE, .a1 = strength, .a2 = delay_ms,
+                        .a3 = 0, .a4 = 0 };
+    post_cmd(cmd);
+}
+
+void motor_disable(void)
+{
+    motor_cmd_t cmd = { .type = MOTOR_CMD_DISABLE, .a1 = 0, .a2 = 0, .a3 = 0, .a4 = 0 };
+    post_cmd(cmd);
 }
