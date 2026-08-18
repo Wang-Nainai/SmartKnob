@@ -63,23 +63,53 @@
 |---|---|---|---|
 | Phase 0 | 基线（git 独立仓库 / sdkconfig.defaults / README / 现状审计） | ✅ 完成 | 编译通过；硬件实测未验证 |
 | Phase 1 | Motor 命令队列 + 单任务独占 + 非阻塞 shake + disable | ✅ 完成 | 编译通过、静态通过；硬件实测未验证 |
-| Phase 2 | Input 组件（旋钮 ROTATE 事件，去抖/去重/复位） | ⏳ | 见阶段内记录 |
-| Phase 3 | Application/Navigation（统一事件消费 + 导航状态） | ⏳ | |
-| Phase 4 | UI/LVGL 重构（参考 X-Knob 视觉与交互） | ⏳ | |
-| Phase 5 | Sensor Manager（SCD40 → 共享状态 → UI/MQTT/Web） | ⏳ | |
-| Phase 6 | WiFi / MQTT / HA（断网不影响本地） | ⏳ | |
-| Phase 7 | Web / OTA / Config / NVS | ⏳ | |
-| Phase 8 | 扩展（LED 状态灯 / 音量 / HID 等） | ⏳ | |
+| Phase 2 | Input 组件（旋钮 ROTATE 事件，去抖/去重/复位） | ✅ 完成 | 编译通过；硬件实测未验证 |
+| Phase 3 | Application/Navigation（统一事件消费 + 触摸优先导航） | ✅ 完成 | 编译通过；硬件实测未验证 |
+| Phase 4 | UI/LVGL 重构（状态栏/工厂测试页/视觉统一） | ✅ 完成 | 编译通过；硬件实测未验证 |
+| Phase 5 | Sensor Manager（app_state 单一数据源） | ✅ 完成 | 编译通过；硬件实测未验证 |
+| Phase 6 | 实时性隔离（scd40/input 钉 core0，motor 独占 core1） | ✅ 完成 | 编译通过；硬件实测未验证 |
+| Phase 7 | 配置统一（亮度/熄屏 NVS 统一到 webcfg） | ✅ 完成 | 编译通过；硬件实测未验证 |
+| Phase 8 | 扩展（LED 连接状态指示：WiFi 绿/MQTT 青/断红） | ✅ 完成 | 编译通过；硬件实测未验证 |
 
 ## 5. 跨模块数据流（现状）
 
 ```
-motor_task: Encoder → loopFOC → haptic_update → snap_position(volatile)
-input_task: 轮询 snap_position → knob_event_t → 队列
-LVGL_task:  消费 knob_event_t + LVGL 触摸事件 → 页面导航
-            → motor_set_mode* / motor_shake（命令队列）
-scd40_task: I2C → 全局 env 快照 → UI 环境页 / MQTT publish / Web status
-wifi:       STA + 重连 → 状态 → UI 状态栏 / webcfg / led
-mqtt:       esp-mqtt 异步 → HA discovery + state + 控制命令
+motor_task(core1): Encoder → loopFOC → haptic_update → snap_position(volatile)
+input_task(core0): 轮询 snap_position → knob_event_t → 队列
+LVGL_task:         消费 knob_event_t + LVGL 触摸事件 → 页面导航
+                   → motor_set_mode* / motor_shake（命令队列）
+scd40_task(core0): I2C → app_state 快照 → UI 环境页 / MQTT publish / Web status
+wifi:       STA + 重连 → 状态 → UI 状态栏 / webcfg / led(绿)
+mqtt:       esp-mqtt 异步 → HA discovery + state + 控制命令 → led(青)
 webcfg:     HTTP / OTA / NVS 配置
+```
+
+## 6. 任务与实时性隔离（现状）
+
+| 任务 | 核 | 优先级 | 说明 |
+|---|---|---|---|
+| motor | core1 | 2 | 唯一操作 BLDCMotor；1ms 周期 |
+| LVGL | 任意 | 2 | 渲染 + 页面 + 输入消费 |
+| input | core0 | 1 | 轮询位置快照 → 事件队列 |
+| scd40 | core0 | 3 | I2C 轮询 → app_state |
+| wifi | core0 | 高 | 系统任务 |
+| mqtt/httpd | 任意 | — | esp-mqtt / esp_http_server 系统任务 |
+
+核心保障：**motor 独占 core1**，scd40/input/wifi 全部钉 core0，
+任何网络/传感器活动都不会抢占电机控制循环。
+
+## 7. 模块清单（现状）
+
+```
+components/
+  motor/      电机控制 + 力反馈引擎(单任务独占)
+  input/      旋钮输入 → ROTATE 事件
+  app_state/  传感器/共享状态单一数据源
+  ui/         页面系统 + 状态栏 + 工厂测试
+  display/    ST7789 + XPT2046 + LVGL 移植
+  scd40/      SCD40 驱动
+  wifi/       WiFi STA
+  mqtt_ha/    Home Assistant MQTT
+  webcfg/     网页配置 + OTA + NVS
+  led/        WS2812 状态灯
 ```

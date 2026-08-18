@@ -6,6 +6,7 @@
 #include "esp_log.h"
 #include "mqtt.h"
 #include "webcfg.h"
+#include "led.h"
 
 static const char *TAG = "mqtt";
 
@@ -79,12 +80,14 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     case MQTT_EVENT_CONNECTED:
         s_connected = true;
         ESP_LOGI(TAG, "Connected to broker");
+        led_set_color(0, 255, 255);   /* 青: WiFi+MQTT 就绪 */
         publish_discovery(client);
         publish_state(client);
         break;
     case MQTT_EVENT_DISCONNECTED:
         s_connected = false;
         ESP_LOGW(TAG, "Disconnected from broker");
+        led_set_color(0, 255, 0);     /* 绿: 仅 WiFi */
         break;
     case MQTT_EVENT_ERROR:
         ESP_LOGW(TAG, "MQTT error, type=%d", event->error_handle ? event->error_handle->error_type : -1);
