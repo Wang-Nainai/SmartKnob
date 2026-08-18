@@ -1,0 +1,36 @@
+config MQTT_HA_ENABLE
+    bool "Upload SCD40 data to Home Assistant via MQTT"
+    default n
+    help
+        Enable publishing CO2/temp/humidity to a Home Assistant MQTT broker.
+
+menu "MQTT HA Broker"
+    depends on MQTT_HA_ENABLE
+
+    config MQTT_HA_BROKER_URI
+        string "Broker URI"
+        default "mqtt://192.168.1.100:1883"
+        help
+            e.g. mqtt://192.168.1.100:1883  (or mqtts:// if TLS)
+
+    config MQTT_HA_USERNAME
+        string "Username"
+        default ""
+
+    config MQTT_HA_PASSWORD
+        string "Password"
+        default ""
+
+    config MQTT_HA_CLIENT_ID
+        string "Client ID / device name"
+        default "SmartKnob"
+        help
+            Used in MQTT client ID and in Home Assistant discovery entity names.
+
+    config MQTT_HA_TOPIC
+        string "HASS control topic prefix"
+        default "knob"
+        help
+            X-Knob style: control commands are published to <topic>/HOME/<device>
+            with payload LEFT / RIGHT / ON / OFF.
+endmenu

@@ -1,0 +1,11 @@
+build/
+sdkconfig
+sdkconfig.old
+
+# 可重建的第三方组件（dependencies.lock 记录版本）
+managed_components/
+
+# 编辑器 / 工具
+.vscode/
+.clangd
+*.swp

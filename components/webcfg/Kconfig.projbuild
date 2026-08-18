@@ -1,0 +1,16 @@
+menu "Web Config & OTA"
+
+config WEBCFG_ENABLE
+    bool "Enable web config server and OTA"
+    default y
+    help
+        Starts an HTTP server on the knob that hosts a config page
+        (WiFi/MQTT settings stored in NVS) and firmware upload (OTA).
+
+config WEBCFG_HTTP_PORT
+    int "HTTP server port"
+    default 80
+    range 1 65535
+    depends on WEBCFG_ENABLE
+
+endmenu

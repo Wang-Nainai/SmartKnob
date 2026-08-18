@@ -1,0 +1,21 @@
+menu "WiFi Configuration"
+
+    config ESP_WIFI_SSID
+        string "WiFi SSID"
+        default "myssid"
+        help
+            Your WiFi network name.
+
+    config ESP_WIFI_PASS
+        string "WiFi Password"
+        default "mypassword"
+        help
+            Your WiFi password.
+
+    config ESP_WIFI_MAX_RETRY
+        int "Max connection retries"
+        default 5
+        help
+            Maximum number of reconnection attempts.
+
+endmenu

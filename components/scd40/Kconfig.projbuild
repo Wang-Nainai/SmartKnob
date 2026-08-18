@@ -1,0 +1,19 @@
+menu "SCD40 CO2 Sensor"
+
+config SCD40_SDA_PIN
+    int "SCD40 SDA GPIO number"
+    default 5
+
+config SCD40_SCL_PIN
+    int "SCD40 SCL GPIO number"
+    default 6
+
+config SCD40_POLL_INTERVAL_MS
+    int "SCD40 poll interval in ms (measurement cycle is 5000 ms)"
+    default 5000
+
+config SCD40_I2C_SPEED_HZ
+    int "SCD40 I2C clock speed in Hz"
+    default 100000
+
+endmenu

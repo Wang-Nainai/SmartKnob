@@ -1,0 +1,119 @@
+﻿#include <stdio.h>
+#include <stdlib.h>
+#include "page_mgr.h"
+#include "motor.h"
+#include "wifi.h"
+#include "mqtt.h"
+#include "display.h"
+#include "esp_app_desc.h"
+#include "esp_timer.h"
+
+LV_FONT_DECLARE(lv_font_msyh_16);
+
+typedef struct {
+    lv_obj_t *val[7];
+} sysinfo_data_t;
+
+static void sysinfo_update(sysinfo_data_t *d)
+{
+    char buf[64];
+    const esp_app_desc_t *app = esp_app_get_description();
+    uint32_t uptime_s = esp_timer_get_time() / 1000000ULL;
+
+    snprintf(buf, sizeof(buf), "v%s", app->version);
+    lv_label_set_text(d->val[0], buf);
+
+    char ip[16];
+    wifi_get_ip_str(ip, sizeof(ip));
+    lv_label_set_text(d->val[1], ip);
+
+    bool m = mqtt_ha_is_connected();
+    lv_label_set_text(d->val[2], m ? "ON" : "OFF");
+    lv_obj_set_style_text_color(d->val[2], lv_color_hex(m ? XK_COLOR_GREEN : XK_COLOR_FAINT), 0);
+
+    snprintf(buf, sizeof(buf), "%u d %02u h", (unsigned)(uptime_s / 86400),
+             (unsigned)((uptime_s % 86400) / 3600));
+    lv_label_set_text(d->val[3], buf);
+
+    int t = display_get_screen_timeout();
+    if (t <= 0) {
+        lv_label_set_text(d->val[4], "OFF");
+    } else {
+        snprintf(buf, sizeof(buf), "%d min", t / 60);
+        lv_label_set_text(d->val[4], buf);
+    }
+
+    snprintf(buf, sizeof(buf), "%s %s", app->date, app->time);
+    lv_label_set_text(d->val[5], buf);
+
+    snprintf(buf, sizeof(buf), "http://%s", ip);
+    lv_label_set_text(d->val[6], buf);
+}
+
+static void pg_sysinfo_create(page_t *p)
+{
+    sysinfo_data_t *d = calloc(1, sizeof(sysinfo_data_t));
+    p->data = d;
+
+    static const char *labels[7] = {
+        "VERSION",
+        "IP",
+        "MQTT",
+        "UPTIME",
+        "SCREEN OFF",
+        "BUILD",
+        "WEB CFG",
+    };
+    static const int ys[7] = { 40, 76, 112, 148, 184, 220, 256 };
+
+    for (int i = 0; i < 7; i++) {
+        lv_obj_t *l = lv_label_create(p->root);
+        lv_obj_set_style_text_color(l, lv_color_hex(XK_COLOR_GRAY), 0);
+        lv_obj_set_style_text_font(l, &lv_font_msyh_16, 0);
+        lv_label_set_text(l, labels[i]);
+        lv_obj_align(l, LV_ALIGN_TOP_LEFT, 14, ys[i]);
+
+        lv_obj_t *v = lv_label_create(p->root);
+        lv_obj_set_style_text_color(v, lv_color_hex(XK_COLOR_TEXT), 0);
+        lv_obj_set_style_text_font(v, &lv_font_msyh_16, 0);
+        lv_label_set_text(v, "");
+        lv_obj_align(v, LV_ALIGN_TOP_RIGHT, -14, ys[i]);
+        d->val[i] = v;
+    }
+
+    sysinfo_update(d);
+    motor_set_mode(MOTOR_MODE_UNBOUND_NO_DETENTS, 0, 0);
+}
+
+static void pg_sysinfo_destroy(page_t *p)
+{
+    free(p->data);
+    p->data = NULL;
+}
+
+static void pg_sysinfo_on_rotate(page_t *p, int dir)
+{
+}
+
+static void pg_sysinfo_on_confirm(page_t *p)
+{
+}
+
+static void pg_sysinfo_on_back(page_t *p)
+{
+    pm_pop();
+}
+
+static void pg_sysinfo_on_tick(page_t *p)
+{
+    sysinfo_update((sysinfo_data_t *)p->data);
+}
+
+const page_ops_t pg_sysinfo_ops = {
+    .create = pg_sysinfo_create,
+    .destroy = pg_sysinfo_destroy,
+    .on_rotate = pg_sysinfo_on_rotate,
+    .on_confirm = pg_sysinfo_on_confirm,
+    .on_back = pg_sysinfo_on_back,
+    .on_tick = pg_sysinfo_on_tick,
+};

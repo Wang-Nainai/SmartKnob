@@ -1,0 +1,77 @@
+menu "Motor Knob Configuration"
+
+    config MOTOR_ENABLE
+        bool "Enable BLDC motor knob"
+        default y
+
+    config MOTOR_PWM_A
+        int "Phase A PWM pin"
+        default 15
+
+    config MOTOR_PWM_B
+        int "Phase B PWM pin"
+        default 16
+
+    config MOTOR_PWM_C
+        int "Phase C PWM pin"
+        default 17
+
+    config MOTOR_EN_PIN
+        int "Driver enable pin (-1 to disable)"
+        default 18
+
+    choice MOTOR_MT6701_INTERFACE
+        prompt "MT6701 interface mode"
+        default MOTOR_MT6701_INTERFACE_ABZ
+
+        config MOTOR_MT6701_INTERFACE_ABZ
+            bool "ABZ incremental encoder (M-Creation module default)"
+
+        config MOTOR_MT6701_INTERFACE_SSI
+            bool "SSI (CSN fixed to GND)"
+
+        config MOTOR_MT6701_INTERFACE_I2C
+            bool "I2C (requires CSN tied to VDD)"
+    endchoice
+
+    config MOTOR_MT6701_ABZ_A_PIN
+        int "ABZ A-phase input pin (module SDA)"
+        default 7
+
+    config MOTOR_MT6701_ABZ_B_PIN
+        int "ABZ B-phase input pin (module SCL)"
+        default 4
+
+    config MOTOR_MT6701_ABZ_PPR
+        int "ABZ pulses per revolution"
+        default 1024
+
+    config MOTOR_MT6701_SCL
+        int "MT6701 SCL/CLK pin"
+        default 4
+
+    config MOTOR_MT6701_SDA
+        int "MT6701 SDA/DO pin"
+        default 7
+
+    config MOTOR_MT6701_CS
+        int "MT6701 CSN pin (SSI mode only)"
+        default 3
+
+    config MOTOR_POLE_PAIRS
+        int "Motor pole pairs"
+        default 7
+
+    config MOTOR_VOLTAGE_SUPPLY
+        int "Motor power supply voltage (V)"
+        default 12
+
+    config MOTOR_VOLTAGE_LIMIT
+        int "Motor voltage limit (V)"
+        default 5
+
+    config MOTOR_TASK_CORE
+        int "Motor task CPU core"
+        default 1
+
+endmenu
