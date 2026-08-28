@@ -23,6 +23,7 @@ typedef struct {
     lv_obj_t *status;
     lv_obj_t *touch_scr;    /* 触摸测试全屏视图 */
     lv_obj_t *touch_label;
+    lv_obj_t *raw_label;    /* XPT2046 原始读数实时诊断 */
     int touch_count;
     lv_timer_t *timer;
 } factory_data_t;
@@ -114,7 +115,8 @@ static void factory_row_cb(lv_event_t *e)
         }
         lv_obj_add_flag(d->status, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(d->touch_scr, LV_OBJ_FLAG_HIDDEN);
-        lv_label_set_text(d->touch_label, "\xE8\xA7\xA6\xE6\x91\xB8\xE5\xB1\x8F\xEF\xBC\x9A\xE7\x82\xB9\xE5\x87\xBB\xE6\xB5\x8B\xE8\xAF\x95\n\xE7\x82\xB9\xE5\x87\xBB\xE5\x8F\xB3\xE4\xB8\x8A\xE8\xA7\x92\xE9\x80\x80\xE5\x87\xBA");
+        lv_obj_clear_flag(d->raw_label, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(d->touch_label, "\xE7\x82\xB9\xE5\x87\xBB\xE5\xB1\x8F\xE5\xB9\x95\xE6\xB5\x8B\xE8\xAF\x95");
         break;
     case 1:  /* LED: 循环颜色 */
         d->led_state = (d->led_state + 1) % 4;
@@ -135,7 +137,7 @@ static void factory_row_cb(lv_event_t *e)
     }
 }
 
-/* 触摸测试视图点击: 显示坐标与计数 */
+/* 触摸测试视图点击: 显示坐标与计数; 右上角退出 */
 static void factory_touch_cb(lv_event_t *e)
 {
     page_t *p = (page_t *)lv_event_get_user_data(e);
@@ -152,6 +154,7 @@ static void factory_touch_cb(lv_event_t *e)
             /* 退出触摸测试 */
             d->in_touch_test = false;
             lv_obj_add_flag(d->touch_scr, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(d->raw_label, LV_OBJ_FLAG_HIDDEN);
             for (int i = 0; i < FACTORY_ITEMS; i++) {
                 lv_obj_clear_flag(d->rows[i], LV_OBJ_FLAG_HIDDEN);
             }
@@ -160,7 +163,7 @@ static void factory_touch_cb(lv_event_t *e)
         }
         d->touch_count++;
         char buf[96];
-        snprintf(buf, sizeof(buf), "\xE7\x82\xB9\xE5\x87\xBB\xEF\xBC\x9A x=%d y=%d\n\xE8\xAE\xA1\xE6\x95\xB0\xEF\xBC\x9A %d\n\n\xE5\x8F\xB3\xE4\xB8\x8A\xE8\xA7\x92\xE9\x80\x80\xE5\x87\xBA",
+        snprintf(buf, sizeof(buf), "\xE7\x82\xB9\xE5\x87\xBB x=%d y=%d  \xE8\xAE\xA1\xE6\x95\xB0 %d",
                  (int)pt.x, (int)pt.y, d->touch_count);
         lv_label_set_text(d->touch_label, buf);
     }
@@ -170,6 +173,14 @@ static void factory_timer_cb(lv_timer_t *t)
 {
     factory_data_t *d = lv_timer_get_user_data(t);
     if (d->in_touch_test) {
+        /* 触摸原始值实时诊断: z1 按下应明显增大;
+         * 恒为 0/4095 不变 => 接线问题(T_CLK/T_DIN/T_DO 未接) */
+        uint16_t z1, z2, rx, ry;
+        bool touched = display_touch_get_raw(&z1, &z2, &rx, &ry);
+        char buf[128];
+        snprintf(buf, sizeof(buf), "z1=%u  z2=%u\nraw x=%u y=%u  %s\n\nT_CLK/T_DIN/T_DO \xE9\x9C\x80\xE6\x8E\xA5" "SCK/MOSI/MISO",
+                 z1, z2, rx, ry, touched ? "\xE2\x97\x8F" : "-");
+        lv_label_set_text(d->raw_label, buf);
         return;
     }
     factory_update_status(d);
@@ -232,7 +243,14 @@ static void pg_factory_create(page_t *p)
     d->touch_label = lv_label_create(d->touch_scr);
     lv_obj_set_style_text_color(d->touch_label, lv_color_hex(XK_COLOR_TEXT), 0);
     lv_obj_set_style_text_font(d->touch_label, &lv_font_msyh_16, 0);
-    lv_obj_center(d->touch_label);
+    lv_obj_align(d->touch_label, LV_ALIGN_CENTER, 0, 60);
+
+    d->raw_label = lv_label_create(d->touch_scr);
+    lv_obj_set_style_text_color(d->raw_label, lv_color_hex(XK_COLOR_GREEN), 0);
+    lv_obj_set_style_text_font(d->raw_label, &lv_font_montserrat_14, 0);
+    lv_label_set_text(d->raw_label, "z1=--  z2=--");
+    lv_obj_align(d->raw_label, LV_ALIGN_CENTER, 0, -50);
+    lv_obj_add_flag(d->raw_label, LV_OBJ_FLAG_HIDDEN);
 
     d->timer = lv_timer_create(factory_timer_cb, 500, d);
     motor_set_mode(MOTOR_MODE_COARSE_STRONG_DETENTS, 0, 0);
@@ -269,6 +287,7 @@ static void pg_factory_on_back(page_t *p)
     if (d->in_touch_test) {
         d->in_touch_test = false;
         lv_obj_add_flag(d->touch_scr, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(d->raw_label, LV_OBJ_FLAG_HIDDEN);
         for (int i = 0; i < FACTORY_ITEMS; i++) {
             lv_obj_clear_flag(d->rows[i], LV_OBJ_FLAG_HIDDEN);
         }

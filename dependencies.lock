@@ -1,18 +1,4 @@
 dependencies:
-  atanisoft/esp_lcd_touch_xpt2046:
-    component_hash: 94c1d199922bc7468b5e14912ab0eb053a4a5a25680ce8a4ca2f4f18febbb01a
-    dependencies:
-    - name: idf
-      require: private
-      version: '>=4.4'
-    - name: espressif/esp_lcd_touch
-      registry_url: https://components.espressif.com
-      require: private
-      version: '>=1.0.4'
-    source:
-      registry_url: https://components.espressif.com/
-      type: service
-    version: 1.0.5
   espressif/arduino-foc:
     component_hash: 9fb94126efc8fbaf578b59ca9cec957df9a5e2a32af834c535c99f3858552af7
     dependencies:
@@ -33,16 +19,6 @@ dependencies:
       registry_url: https://components.espressif.com
       type: service
     version: 1.1.1
-  espressif/esp_lcd_touch:
-    component_hash: 3f85a7d95af876f1a6ecca8eb90a81614890d0f03a038390804e5a77e2caf862
-    dependencies:
-    - name: idf
-      require: private
-      version: '>=4.4.2'
-    source:
-      registry_url: https://components.espressif.com
-      type: service
-    version: 1.2.1
   espressif/esp_simplefoc:
     component_hash: 42ca89d9d4b9cf0d9d0e5ff82732247c42793a45a322d4f422878a6547ff6324
     dependencies:
@@ -101,9 +77,8 @@ dependencies:
       type: service
     version: 9.2.0
 direct_dependencies:
-- atanisoft/esp_lcd_touch_xpt2046
 - espressif/esp_simplefoc
 - lvgl/lvgl
-manifest_hash: 92ff9df08b7d7809349be6df2aa6a6ebc5aba370076f45b532bb66c695d62bd9
+manifest_hash: b280bb1668fc28ea396dff9132dbe4511284300373336ca219c43e64da5a4f1a
 target: esp32s3
 version: 2.0.0

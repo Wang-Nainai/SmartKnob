@@ -106,10 +106,21 @@ components/
   input/      旋钮输入 → ROTATE 事件
   app_state/  传感器/共享状态单一数据源
   ui/         页面系统 + 状态栏 + 工厂测试
-  display/    ST7789 + XPT2046 + LVGL 移植
+  display/    ST7789 + XPT2046 裸驱动(自研,含标定/诊断) + LVGL 移植
   scd40/      SCD40 驱动
   wifi/       WiFi STA
   mqtt_ha/    Home Assistant MQTT
   webcfg/     网页配置 + OTA + NVS
   led/        WS2812 状态灯
 ```
+
+## 8. 触摸子系统（自研 XPT2046 驱动）
+
+第三方 `atanisoft/esp_lcd_touch_xpt2046` 存在 XY 命令字标反的缺陷（BUG-009），
+已替换为 `display.c` 内自研裸驱动：
+
+- 数据手册标准命令：`0x90=X, 0xD0=Y, 0xB0=Z1, 0xC0=Z2`（12bit, DFR, PD=00）
+- 压力判定：`z = z1 + 4095 - z2`，阈值 `CONFIG_TOUCH_Z_THRESHOLD`（默认 300）
+- 标定：`TOUCH_X/Y_MIN/MAX` + `SWAP_XY/MIRROR_X/MIRROR_Y`（Kconfig）
+- 诊断：开机 selftest 日志 + `display_touch_get_raw()` 供工厂测试实时显示
+- 读数仅发生在 LVGL 任务的 indev 回调内，与刷屏同任务串行，无跨任务 SPI 竞争

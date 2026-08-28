@@ -14,7 +14,6 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "lvgl.h"
-#include "esp_lcd_touch_xpt2046.h"
 #include "display.h"
 
 static const char *TAG = "display";
@@ -38,9 +37,10 @@ static const char *TAG = "display";
 #define LVGL_DRAW_BUF_LINES    40
 #define LVGL_TICK_PERIOD_MS    2
 #define LVGL_TASK_MAX_DELAY_MS 500
-#define LVGL_TASK_MIN_DELAY_MS 100
+#define LVGL_TASK_MIN_DELAY_MS 5
 #define LVGL_TASK_STACK_SIZE   (10 * 1024)
 #define LVGL_TASK_PRIORITY     2
+#define LVGL_TASK_CORE         0   /* motor 独占 core1, LVGL 固定 core0 */
 
 static _lock_t lvgl_api_lock;
 static lv_display_t *lvgl_disp = NULL;
@@ -136,30 +136,119 @@ static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px
     esp_lcd_panel_draw_bitmap(panel_handle, offsetx1, offsety1, offsetx2 + 1, offsety2 + 1, px_map);
 }
 
+/* ==================== XPT2046 裸驱动 ====================
+ * 数据手册标准命令字(12bit, DFR, PD=00):
+ *   0x90 = X 位置, 0xD0 = Y 位置, 0xB0 = Z1, 0xC0 = Z2
+ * 注意: 常见第三方驱动(atanisoft)把 0x90/0xD0 标反,
+ *       导致 X/Y 互换, 表现为触摸"完全无效"。
+ * 读数: 命令后跟 2 字节, 第 1 位为 busy, 12 位数据, 右移 3 位。 */
+#define TP_CMD_X    0x90
+#define TP_CMD_Y    0xD0
+#define TP_CMD_Z1   0xB0
+#define TP_CMD_Z2   0xC0
+
+typedef struct {
+    esp_lcd_panel_io_handle_t io;
+    /* 最近一次原始读数(诊断用) */
+    uint16_t raw_z1;
+    uint16_t raw_z2;
+    uint16_t raw_x;
+    uint16_t raw_y;
+    bool touched;
+    uint16_t x;         /* 映射后的屏幕坐标 */
+    uint16_t y;
+} xpt2046_state_t;
+
+static xpt2046_state_t s_tp = { .io = NULL };
+
+static uint16_t tp_read_reg(uint8_t cmd)
+{
+    uint8_t buf[2] = {0, 0};
+    if (!s_tp.io) {
+        return 0;
+    }
+    if (esp_lcd_panel_io_rx_param(s_tp.io, cmd, buf, 2) != ESP_OK) {
+        return 0;
+    }
+    return (((uint16_t)buf[0] << 8) | buf[1]) >> 3;
+}
+
+static uint16_t tp_map(int32_t raw, int32_t raw_min, int32_t raw_max, int32_t out_max)
+{
+    if (raw_max <= raw_min) {
+        return 0;
+    }
+    int32_t v = (raw - raw_min) * out_max / (raw_max - raw_min);
+    if (v < 0) v = 0;
+    if (v >= out_max) v = out_max - 1;
+    return (uint16_t)v;
+}
+
+static void tp_poll(void)
+{
+    uint16_t z1 = tp_read_reg(TP_CMD_Z1);
+    uint16_t z2 = tp_read_reg(TP_CMD_Z2);
+    int32_t pressure = (int32_t)z1 + 4095 - (int32_t)z2;
+
+    s_tp.raw_z1 = z1;
+    s_tp.raw_z2 = z2;
+
+    if (pressure < CONFIG_TOUCH_Z_THRESHOLD) {
+        s_tp.touched = false;
+        s_tp.raw_x = 0;
+        s_tp.raw_y = 0;
+        return;
+    }
+
+    /* 首次转换丢弃(Vref 稳定), 再多次取样求平均 */
+    tp_read_reg(TP_CMD_X);
+    int32_t x_acc = 0, y_acc = 0;
+    const int n = 4;
+    tp_read_reg(TP_CMD_Y);
+    for (int i = 0; i < n; i++) {
+        x_acc += tp_read_reg(TP_CMD_X);
+        y_acc += tp_read_reg(TP_CMD_Y);
+    }
+    uint16_t rx = x_acc / n;
+    uint16_t ry = y_acc / n;
+
+    s_tp.raw_x = rx;
+    s_tp.raw_y = ry;
+    s_tp.touched = true;
+
+    uint16_t mx = tp_map(rx, CONFIG_TOUCH_X_MIN, CONFIG_TOUCH_X_MAX, LCD_H_RES);
+    uint16_t my = tp_map(ry, CONFIG_TOUCH_Y_MIN, CONFIG_TOUCH_Y_MAX, LCD_V_RES);
+#if CONFIG_TOUCH_SWAP_XY
+    uint16_t t = mx; mx = my; my = t;
+#endif
+#if CONFIG_TOUCH_MIRROR_X
+    mx = LCD_H_RES - 1 - mx;
+#endif
+#if CONFIG_TOUCH_MIRROR_Y
+    my = LCD_V_RES - 1 - my;
+#endif
+    s_tp.x = mx;
+    s_tp.y = my;
+}
+
+bool display_touch_get_raw(uint16_t *z1, uint16_t *z2, uint16_t *raw_x, uint16_t *raw_y)
+{
+    *z1 = s_tp.raw_z1;
+    *z2 = s_tp.raw_z2;
+    *raw_x = s_tp.raw_x;
+    *raw_y = s_tp.raw_y;
+    return s_tp.touched;
+}
+
 static void lvgl_touch_cb(lv_indev_t *indev, lv_indev_data_t *data)
 {
-    esp_lcd_touch_point_data_t touch_data[1] = {{0}};
-    uint8_t touchpad_cnt = 0;
-    static int call_count = 0;
-
-    esp_lcd_touch_handle_t touch_pad = lv_indev_get_user_data(indev);
-    esp_err_t err = esp_lcd_touch_read_data(touch_pad);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Touch read SPI error: %d", err);
-    }
-    esp_lcd_touch_get_data(touch_pad, touch_data, &touchpad_cnt, 1);
-
-    call_count++;
-    if (touchpad_cnt > 0) {
-        ESP_LOGI(TAG, "Touch: x=%d, y=%d, strength=%d",
-                 touch_data[0].x, touch_data[0].y, touch_data[0].strength);
-        data->point.x = touch_data[0].x;
-        data->point.y = touch_data[0].y;
+    (void)indev;
+    tp_poll();
+    if (s_tp.touched) {
+        data->point.x = s_tp.x;
+        data->point.y = s_tp.y;
         data->state = LV_INDEV_STATE_PRESSED;
     } else {
-        if (call_count % 50 == 0) {
-            ESP_LOGI(TAG, "Touch poll #%d: no touch detected", call_count);
-        }
         data->state = LV_INDEV_STATE_RELEASED;
     }
 }
@@ -333,60 +422,38 @@ esp_err_t display_init(void)
     };
     ESP_ERROR_CHECK(esp_lcd_panel_io_register_event_callbacks(io_handle, &cbs, lvgl_disp));
 
-    ESP_LOGI(TAG, "Initialize XPT2046 touch");
+    ESP_LOGI(TAG, "Initialize XPT2046 touch (raw driver)");
     esp_lcd_panel_io_handle_t tp_io_handle = NULL;
-    esp_lcd_panel_io_spi_config_t tp_io_config = ESP_LCD_TOUCH_IO_SPI_XPT2046_CONFIG(PIN_NUM_TOUCH_CS);
-    ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)LCD_HOST, &tp_io_config, &tp_io_handle));
-
-    esp_lcd_touch_config_t tp_cfg = {
-        .x_max = LCD_H_RES,
-        .y_max = LCD_V_RES,
-        .rst_gpio_num = -1,
-        .int_gpio_num = -1,
-        .flags = {
-            .swap_xy = 0,
-            .mirror_x = 0,
-            .mirror_y = 0,
-        },
+    esp_lcd_panel_io_spi_config_t tp_io_config = {
+        .cs_gpio_num = PIN_NUM_TOUCH_CS,
+        .dc_gpio_num = -1,
+        .spi_mode = 0,                  /* XPT2046: mode 0, <=2.5MHz */
+        .pclk_hz = 1 * 1000 * 1000,
+        .trans_queue_depth = 3,
+        .lcd_cmd_bits = 8,
+        .lcd_param_bits = 8,
     };
-    esp_lcd_touch_handle_t tp = NULL;
-    ESP_ERROR_CHECK(esp_lcd_touch_new_spi_xpt2046(tp_io_handle, &tp_cfg, &tp));
+    ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)LCD_HOST, &tp_io_config, &tp_io_handle));
+    s_tp.io = tp_io_handle;
 
-    // XPT2046 diagnostic: read raw registers
+    /* 开机自检: 读一次原始值, 用于排查接线
+     * 正常: 未按下时 z1≈0 z2≈4095; 若恒为 0 或 4095 请检查
+     * T_CLK/T_DIN/T_DO 是否已接到 SCK/MOSI/MISO(此类红板触摸与 LCD 是独立引脚) */
     vTaskDelay(pdMS_TO_TICKS(100));
-    ESP_LOGI(TAG, "=== XPT2046 Raw Register Dump ===");
-    for (int attempt = 0; attempt < 3; attempt++) {
-        uint8_t buf[2];
-        esp_err_t e;
-
-        buf[0] = buf[1] = 0;
-        e = esp_lcd_panel_io_rx_param(tp_io_handle, 0xB1, buf, 2);
-        ESP_LOGI(TAG, "  Z1 cmd=0xB1: buf=[0x%02X,0x%02X] raw=0x%04X err=%d", buf[0], buf[1], (buf[0]<<8)|buf[1], e);
-
-        buf[0] = buf[1] = 0;
-        e = esp_lcd_panel_io_rx_param(tp_io_handle, 0xC1, buf, 2);
-        ESP_LOGI(TAG, "  Z2 cmd=0xC1: buf=[0x%02X,0x%02X] raw=0x%04X err=%d", buf[0], buf[1], (buf[0]<<8)|buf[1], e);
-
-        buf[0] = buf[1] = 0;
-        e = esp_lcd_panel_io_rx_param(tp_io_handle, 0xD1, buf, 2);
-        ESP_LOGI(TAG, "  X  cmd=0xD1: buf=[0x%02X,0x%02X] raw=0x%04X err=%d", buf[0], buf[1], (buf[0]<<8)|buf[1], e);
-
-        buf[0] = buf[1] = 0;
-        e = esp_lcd_panel_io_rx_param(tp_io_handle, 0x91, buf, 2);
-        ESP_LOGI(TAG, "  Y  cmd=0x91: buf=[0x%02X,0x%02X] raw=0x%04X err=%d", buf[0], buf[1], (buf[0]<<8)|buf[1], e);
-
-        vTaskDelay(pdMS_TO_TICKS(50));
-    }
-    ESP_LOGI(TAG, "=== XPT2046 Dump End ===");
+    uint16_t z1 = tp_read_reg(TP_CMD_Z1);
+    uint16_t z2 = tp_read_reg(TP_CMD_Z2);
+    uint16_t rx = tp_read_reg(TP_CMD_X);
+    uint16_t ry = tp_read_reg(TP_CMD_Y);
+    ESP_LOGI(TAG, "XPT2046 selftest: z1=%u z2=%u x=%u y=%u (untouched expect z1~0,z2~4095)", z1, z2, rx, ry);
 
     lv_indev_t *indev = lv_indev_create();
     lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
     lv_indev_set_display(indev, lvgl_disp);
-    lv_indev_set_user_data(indev, tp);
+    lv_indev_set_user_data(indev, &s_tp);
     lv_indev_set_read_cb(indev, lvgl_touch_cb);
 
     ESP_LOGI(TAG, "Create LVGL task");
-    xTaskCreate(lvgl_port_task, "LVGL", LVGL_TASK_STACK_SIZE, NULL, LVGL_TASK_PRIORITY, NULL);
+    xTaskCreatePinnedToCore(lvgl_port_task, "LVGL", LVGL_TASK_STACK_SIZE, NULL, LVGL_TASK_PRIORITY, NULL, LVGL_TASK_CORE);
 
     ESP_LOGI(TAG, "Display init done");
     return ESP_OK;

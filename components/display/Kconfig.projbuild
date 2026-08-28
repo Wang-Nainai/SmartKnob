@@ -1,0 +1,39 @@
+menu "Display / Touch Configuration"
+
+config TOUCH_Z_THRESHOLD
+    int "XPT2046 touch pressure threshold (z1 + 4095 - z2)"
+    default 300
+    range 10 4000
+    help
+        触摸压力判定阈值。数值越小越灵敏。
+        实测: 未按下时 z1+4095-z2 接近 0, 按下时通常 > 300。
+
+config TOUCH_X_MIN
+    int "XPT2046 raw X at screen left edge"
+    default 200
+
+config TOUCH_X_MAX
+    int "XPT2046 raw X at screen right edge"
+    default 3900
+
+config TOUCH_Y_MIN
+    int "XPT2046 raw Y at screen top edge"
+    default 240
+
+config TOUCH_Y_MAX
+    int "XPT2046 raw Y at screen bottom edge"
+    default 3800
+
+config TOUCH_SWAP_XY
+    bool "Swap touch X/Y axes"
+    default n
+
+config TOUCH_MIRROR_X
+    bool "Mirror touch X axis"
+    default n
+
+config TOUCH_MIRROR_Y
+    bool "Mirror touch Y axis"
+    default n
+
+endmenu
