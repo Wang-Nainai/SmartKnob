@@ -3,7 +3,7 @@
 #include "page_mgr.h"
 #include "motor.h"
 
-LV_FONT_DECLARE(lv_font_montserrat_26);
+LV_FONT_DECLARE(lv_font_montserrat_48);
 LV_FONT_DECLARE(lv_font_msyh_16);
 
 typedef struct {
@@ -193,9 +193,9 @@ static void pg_playground_create(page_t *p)
 
     d->label_value = lv_label_create(p->root);
     lv_obj_set_style_text_color(d->label_value, lv_color_hex(XK_COLOR_TEXT), 0);
-    lv_obj_set_style_text_font(d->label_value, &lv_font_montserrat_26, 0);
+    lv_obj_set_style_text_font(d->label_value, &lv_font_montserrat_48, 0);
     lv_label_set_text(d->label_value, "0");
-    lv_obj_align(d->label_value, LV_ALIGN_CENTER, 0, 80);
+    lv_obj_align(d->label_value, LV_ALIGN_CENTER, 0, 60);
 
     pg_apply_mode(d);
     d->timer = lv_timer_create(pg_playground_timer, 50, d);

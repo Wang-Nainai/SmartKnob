@@ -6,6 +6,7 @@
 typedef enum {
     PAGE_STARTUP = 0,
     PAGE_MENU,
+    PAGE_PCDIAL,
     PAGE_PLAYGROUND,
     PAGE_HASS,
     PAGE_ENV,

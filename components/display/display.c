@@ -137,15 +137,21 @@ static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px
 }
 
 /* ==================== XPT2046 裸驱动 ====================
- * 数据手册标准命令字(12bit, DFR, PD=00):
- *   0x90 = X 位置, 0xD0 = Y 位置, 0xB0 = Z1, 0xC0 = Z2
- * 注意: 常见第三方驱动(atanisoft)把 0x90/0xD0 标反,
- *       导致 X/Y 互换, 表现为触摸"完全无效"。
+ * 命令字(12bit, DFR, PD=00): 0xB0=Z1, 0xC0=Z2
+ * 轴向(参考店家 XPT2406.C 实测约定):
+ *   0xD0 = 横轴(X), 0x90 = 纵轴(Y)
+ * 注意: 数据手册定义 0x90=A[001] "X-Position"/0xD0=A[101] "Y-Position",
+ *       但面板玻璃接线决定实际轴向; 店家对该屏的实测代码即为
+ *       CMD_RDX=0xD0 / CMD_RDY=0x90, 且可通过 TOUCH_SWAP_XY 再纠正。
  * 读数: 命令后跟 2 字节, 第 1 位为 busy, 12 位数据, 右移 3 位。 */
-#define TP_CMD_X    0x90
-#define TP_CMD_Y    0xD0
+#define TP_CMD_X    0xD0
+#define TP_CMD_Y    0x90
 #define TP_CMD_Z1   0xB0
 #define TP_CMD_Z2   0xC0
+
+/* 店家滤波策略: 采 5 次, 排序, 去掉最大最小, 取中间均值 */
+#define TP_READ_TIMES 5
+#define TP_ERR_RANGE  100   /* 双读一致性阈值(原始值) */
 
 typedef struct {
     esp_lcd_panel_io_handle_t io;
@@ -171,6 +177,27 @@ static uint16_t tp_read_reg(uint8_t cmd)
         return 0;
     }
     return (((uint16_t)buf[0] << 8) | buf[1]) >> 3;
+}
+
+/* 店家滤波: 采 TP_READ_TIMES 次, 排序去极值, 取中间均值 */
+static uint16_t tp_read_filtered(uint8_t cmd)
+{
+    uint16_t buf[TP_READ_TIMES];
+    for (int i = 0; i < TP_READ_TIMES; i++) {
+        buf[i] = tp_read_reg(cmd);
+    }
+    for (int i = 0; i < TP_READ_TIMES - 1; i++) {
+        for (int j = i + 1; j < TP_READ_TIMES; j++) {
+            if (buf[i] > buf[j]) {
+                uint16_t t = buf[i]; buf[i] = buf[j]; buf[j] = t;
+            }
+        }
+    }
+    uint32_t sum = 0;
+    for (int i = 1; i < TP_READ_TIMES - 1; i++) {
+        sum += buf[i];
+    }
+    return (uint16_t)(sum / (TP_READ_TIMES - 2));
 }
 
 static uint16_t tp_map(int32_t raw, int32_t raw_min, int32_t raw_max, int32_t out_max)
@@ -200,17 +227,24 @@ static void tp_poll(void)
         return;
     }
 
-    /* 首次转换丢弃(Vref 稳定), 再多次取样求平均 */
+    /* 首次转换丢弃(Vref 稳定), 再滤波取样 */
     tp_read_reg(TP_CMD_X);
-    int32_t x_acc = 0, y_acc = 0;
-    const int n = 4;
+    uint16_t rx = tp_read_filtered(TP_CMD_X);
     tp_read_reg(TP_CMD_Y);
-    for (int i = 0; i < n; i++) {
-        x_acc += tp_read_reg(TP_CMD_X);
-        y_acc += tp_read_reg(TP_CMD_Y);
+    uint16_t ry = tp_read_filtered(TP_CMD_Y);
+
+    /* 店家一致性校验(Read_XY2): 二次读数偏差过大视为噪声丢弃 */
+    uint16_t rx2 = tp_read_filtered(TP_CMD_X);
+    uint16_t ry2 = tp_read_filtered(TP_CMD_Y);
+    int32_t dx = (int32_t)rx - (int32_t)rx2;
+    int32_t dy = (int32_t)ry - (int32_t)ry2;
+    if (dx < -TP_ERR_RANGE || dx > TP_ERR_RANGE ||
+        dy < -TP_ERR_RANGE || dy > TP_ERR_RANGE) {
+        s_tp.touched = false;
+        s_tp.raw_x = 0;
+        s_tp.raw_y = 0;
+        return;
     }
-    uint16_t rx = x_acc / n;
-    uint16_t ry = y_acc / n;
 
     s_tp.raw_x = rx;
     s_tp.raw_y = ry;

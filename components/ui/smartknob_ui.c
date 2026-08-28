@@ -16,6 +16,7 @@
 #include "wifi.h"
 #include "input.h"
 #include "app_state.h"
+#include "blehid.h"
 
 static const char *TAG = "smartknob_ui";
 
@@ -28,6 +29,7 @@ LV_FONT_DECLARE(lv_font_msyh_16);
 
 extern const page_ops_t pg_startup_ops;
 extern const page_ops_t pg_menu_ops;
+extern const page_ops_t pg_pcdial_ops;
 extern const page_ops_t pg_playground_ops;
 extern const page_ops_t pg_hass_ops;
 extern const page_ops_t pg_env_ops;
@@ -38,6 +40,7 @@ extern const page_ops_t pg_factory_ops;
 static const page_ops_t *const page_ops_table[PAGE_COUNT] = {
     [PAGE_STARTUP]    = &pg_startup_ops,
     [PAGE_MENU]       = &pg_menu_ops,
+    [PAGE_PCDIAL]     = &pg_pcdial_ops,
     [PAGE_PLAYGROUND] = &pg_playground_ops,
     [PAGE_HASS]       = &pg_hass_ops,
     [PAGE_ENV]        = &pg_env_ops,
@@ -58,6 +61,7 @@ static lv_obj_t *pm_screen = NULL;
 static lv_obj_t *sb_back_btn;
 static lv_obj_t *sb_title;
 static lv_obj_t *sb_wifi;
+static lv_obj_t *sb_ble;
 static lv_obj_t *sb_mqtt;
 static lv_obj_t *sb_time;
 
@@ -248,8 +252,10 @@ static void status_bar_update(void)
 
     bool w = wifi_is_connected();
     bool m = mqtt_ha_is_connected();
+    bool b = blehid_is_connected();
     lv_obj_set_style_text_color(sb_wifi, lv_color_hex(w ? XK_COLOR_GREEN : XK_COLOR_FAINT), 0);
     lv_obj_set_style_text_color(sb_mqtt, lv_color_hex(m ? XK_COLOR_BLUE : XK_COLOR_FAINT), 0);
+    lv_obj_set_style_text_color(sb_ble, lv_color_hex(b ? XK_COLOR_GREEN : XK_COLOR_FAINT), 0);
 
     /* 返回按钮: 仅当页面栈深度 >1 时显示 */
     bool show_back = pm_stack_depth > 1;
@@ -304,12 +310,18 @@ static void status_bar_create(void)
     lv_obj_set_style_text_color(sb_wifi, lv_color_hex(XK_COLOR_FAINT), 0);
     lv_obj_set_style_text_font(sb_wifi, &lv_font_montserrat_14, 0);
     lv_label_set_text(sb_wifi, LV_SYMBOL_WIFI);
-    lv_obj_align(sb_wifi, LV_ALIGN_RIGHT_MID, -58, 0);
+    lv_obj_align(sb_wifi, LV_ALIGN_RIGHT_MID, -82, 0);
+
+    sb_ble = lv_label_create(bar);
+    lv_obj_set_style_text_color(sb_ble, lv_color_hex(XK_COLOR_FAINT), 0);
+    lv_obj_set_style_text_font(sb_ble, &lv_font_montserrat_14, 0);
+    lv_label_set_text(sb_ble, LV_SYMBOL_BLUETOOTH);
+    lv_obj_align(sb_ble, LV_ALIGN_RIGHT_MID, -58, 0);
 
     sb_mqtt = lv_label_create(bar);
     lv_obj_set_style_text_color(sb_mqtt, lv_color_hex(XK_COLOR_FAINT), 0);
     lv_obj_set_style_text_font(sb_mqtt, &lv_font_montserrat_14, 0);
-    lv_label_set_text(sb_mqtt, LV_SYMBOL_BLUETOOTH);
+    lv_label_set_text(sb_mqtt, LV_SYMBOL_UPLOAD);
     lv_obj_align(sb_mqtt, LV_ALIGN_RIGHT_MID, -34, 0);
 
     sb_time = lv_label_create(bar);

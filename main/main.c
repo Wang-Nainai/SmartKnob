@@ -14,6 +14,7 @@
 #include "webcfg.h"
 #include "input.h"
 #include "app_state.h"
+#include "blehid.h"
 
 static const char *TAG = "SmartKnob";
 
@@ -114,6 +115,7 @@ void app_main(void)
     webcfg_set_apply_cb(on_webcfg_apply);
 
     led_set_color(0, 0, 255);
+    blehid_init();        /* BLE HID: 电脑控制(S-Dial), 开机可配对 */
     wifi_init();
     init_sntp();
 

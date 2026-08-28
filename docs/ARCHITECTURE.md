@@ -105,6 +105,7 @@ components/
   motor/      电机控制 + 力反馈引擎(单任务独占)
   input/      旋钮输入 → ROTATE 事件
   app_state/  传感器/共享状态单一数据源
+  blehid/     BLE HID 设备(NimBLE): 电脑音量/媒体/滚轮 (S-Dial)
   ui/         页面系统 + 状态栏 + 工厂测试
   display/    ST7789 + XPT2046 裸驱动(自研,含标定/诊断) + LVGL 移植
   scd40/      SCD40 驱动
@@ -113,6 +114,16 @@ components/
   webcfg/     网页配置 + OTA + NVS
   led/        WS2812 状态灯
 ```
+
+## 9. BLE HID 电脑控制（S-Dial，仿 X-Knob Surface Dial）
+
+- 协议：标准 BLE HID over GATT（HID Service 0x1812 + Report Map +
+  Consumer Control Report(ID1) + Mouse Report(ID2) + Battery），设备名 `SmartKnob`。
+- 免驱：Windows/macOS 蓝牙设置直接配对，绑定持久化（NVS），断线自动重连广播。
+- 能力：音量加减/静音/播放暂停/上一首/下一首（消费控制）、滚轮与相对移动（鼠标）。
+- 页面交互（`pg_pcdial`）：旋转=音量/滚轮（页面内切换模式），
+  点中心=播放暂停，底部按钮=上下曲；状态栏蓝牙图标显示连接状态。
+- 启用成本：固件 +340KB（应用分区已扩至 3MB×3，余 37%）。
 
 ## 8. 触摸子系统（自研 XPT2046 驱动）
 

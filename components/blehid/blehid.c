@@ -1,0 +1,353 @@
+#include "blehid.h"
+#include <string.h>
+#include "esp_log.h"
+#include "esp_check.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "nimble/nimble_port.h"
+#include "nimble/nimble_port_freertos.h"
+#include "host/ble_hs.h"
+#include "host/util/util.h"
+#include "services/gap/ble_svc_gap.h"
+#include "services/gatt/ble_svc_gatt.h"
+
+static const char *TAG = "blehid";
+
+#define HID_DEV_NAME        "SmartKnob"
+#define HID_APPEARANCE      0x03C2      /* Generic HID */
+
+/* ---------------- HID Report Map ----------------
+ * Report ID 1: Consumer Control (16bit usage 数组)
+ * Report ID 2: Mouse (3 按键 + XY 相对 + 滚轮)
+ * Windows/macOS/Linux 免驱识别。 */
+static const uint8_t s_report_map[] = {
+    /* Mouse */
+    0x05, 0x01,                     /* Usage Page (Generic Desktop) */
+    0x09, 0x02,                     /* Usage (Mouse) */
+    0xA1, 0x01,                     /* Collection (Application) */
+    0x85, 0x02,                     /*   Report ID (2) */
+    0x09, 0x01,                     /*   Usage (Pointer) */
+    0xA1, 0x00,                     /*   Collection (Physical) */
+    0x05, 0x09,                     /*     Usage Page (Buttons) */
+    0x19, 0x01, 0x29, 0x03,         /*     Usage Min 1, Max 3 */
+    0x15, 0x00, 0x25, 0x01,         /*     Logical 0..1 */
+    0x75, 0x01, 0x95, 0x03,         /*     Size 1, Count 3 */
+    0x81, 0x02,                     /*     Input (Data, Var, Abs) */
+    0x75, 0x05, 0x95, 0x01,         /*     padding: Size 5, Count 1 */
+    0x81, 0x03,                     /*     Input (Const, Var, Abs) */
+    0x05, 0x01,                     /*     Usage Page (Generic Desktop) */
+    0x09, 0x30, 0x09, 0x31,         /*     Usage X, Y */
+    0x09, 0x38,                     /*     Usage (Wheel) */
+    0x15, 0x81, 0x25, 0x7F,         /*     Logical -127..127 */
+    0x75, 0x08, 0x95, 0x03,         /*     Size 8, Count 3 */
+    0x81, 0x06,                     /*     Input (Data, Var, Rel) */
+    0xC0, 0xC0,                     /*   End Collection x2 */
+    /* Consumer Control */
+    0x05, 0x0C,                     /* Usage Page (Consumer) */
+    0x09, 0x01,                     /* Usage (Consumer Control) */
+    0xA1, 0x01,                     /* Collection (Application) */
+    0x85, 0x01,                     /*   Report ID (1) */
+    0x15, 0x00,                     /*   Logical Min 0 */
+    0x26, 0xFF, 0x03,               /*   Logical Max 1023 */
+    0x19, 0x00,                     /*   Usage Min 0 */
+    0x2A, 0xFF, 0x03,               /*   Usage Max 1023 */
+    0x75, 0x10, 0x95, 0x01,         /*   Size 16, Count 1 */
+    0x81, 0x00,                     /*   Input (Data, Array, Abs) */
+    0xC0,
+};
+
+/* ---------------- 状态 ---------------- */
+static bool s_inited = false;
+static volatile bool s_connected = false;
+static volatile uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+static uint8_t s_own_addr_type = 0;
+
+/* GATT 句柄 */
+static uint16_t h_consumer_report;
+static uint16_t h_mouse_report;
+
+/* ---------------- UUID ---------------- */
+static const ble_uuid16_t uuid_svc_hid   = BLE_UUID16_INIT(0x1812);
+static const ble_uuid16_t uuid_svc_bat   = BLE_UUID16_INIT(0x180F);
+static const ble_uuid16_t uuid_chr_hid_info = BLE_UUID16_INIT(0x2A4A);
+static const ble_uuid16_t uuid_chr_report_map = BLE_UUID16_INIT(0x2A4B);
+static const ble_uuid16_t uuid_chr_proto_mode = BLE_UUID16_INIT(0x2A4E);
+static const ble_uuid16_t uuid_chr_report = BLE_UUID16_INIT(0x2A4D);
+static const ble_uuid16_t uuid_dsc_report_ref = BLE_UUID16_INIT(0x2908);
+static const ble_uuid16_t uuid_chr_battery = BLE_UUID16_INIT(0x2A19);
+
+/* Report Reference 描述符值: {Report ID, 类型(1=Input)} */
+static const uint8_t report_ref_consumer[2] = { 0x01, 0x01 };
+static const uint8_t report_ref_mouse[2]    = { 0x02, 0x01 };
+/* HID Information: bcdHID=1.1, country=0, flags=normally connectable */
+static const uint8_t hid_info_val[4] = { 0x01, 0x01, 0x00, 0x02 };
+static const uint8_t proto_mode_val = 0x01;   /* Report 协议 */
+static const uint8_t battery_val = 100;
+
+static void adv_start(void);
+
+/* ---------------- GATT 访问回调 ---------------- */
+
+static int hid_info_cb(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    return os_mbuf_append(ctxt->om, hid_info_val, sizeof(hid_info_val));
+}
+
+static int report_map_cb(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    return os_mbuf_append(ctxt->om, s_report_map, sizeof(s_report_map));
+}
+
+static int proto_mode_cb(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        return os_mbuf_append(ctxt->om, &proto_mode_val, 1);
+    }
+    return 0;   /* write: 忽略内容(仅支持 Report 协议) */
+}
+
+static int report_read_cb(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    /* 输入报告读取返回全 0 (无按键/无移动) */
+    static const uint8_t zero5[5] = {0};
+    return os_mbuf_append(ctxt->om, zero5, 5);
+}
+
+static int report_ref_cb(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    const uint8_t *ref = (const uint8_t *)arg;
+    return os_mbuf_append(ctxt->om, ref, 2);
+}
+
+static int battery_cb(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    return os_mbuf_append(ctxt->om, &battery_val, 1);
+}
+
+/* ---------------- GATT 服务表 ---------------- */
+
+static const struct ble_gatt_svc_def gatt_svcs[] = {
+    {   /* HID Service */
+        .type = BLE_GATT_SVC_TYPE_PRIMARY,
+        .uuid = &uuid_svc_hid.u,
+        .characteristics = (struct ble_gatt_chr_def[]) {
+            {   /* HID Information */
+                .uuid = &uuid_chr_hid_info.u,
+                .access_cb = hid_info_cb,
+                .flags = BLE_GATT_CHR_F_READ,
+            },
+            {   /* Report Map */
+                .uuid = &uuid_chr_report_map.u,
+                .access_cb = report_map_cb,
+                .flags = BLE_GATT_CHR_F_READ,
+            },
+            {   /* Protocol Mode */
+                .uuid = &uuid_chr_proto_mode.u,
+                .access_cb = proto_mode_cb,
+                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE_NO_RSP,
+            },
+            {   /* Input Report: Consumer Control */
+                .uuid = &uuid_chr_report.u,
+                .access_cb = report_read_cb,
+                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
+                .val_handle = &h_consumer_report,
+                .descriptors = (struct ble_gatt_dsc_def[]) {
+                    { .uuid = &uuid_dsc_report_ref.u,
+                      .att_flags = BLE_ATT_F_READ,
+                      .access_cb = report_ref_cb,
+                      .arg = (void *)report_ref_consumer },
+                    { 0 },
+                },
+            },
+            {   /* Input Report: Mouse */
+                .uuid = &uuid_chr_report.u,
+                .access_cb = report_read_cb,
+                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
+                .val_handle = &h_mouse_report,
+                .descriptors = (struct ble_gatt_dsc_def[]) {
+                    { .uuid = &uuid_dsc_report_ref.u,
+                      .att_flags = BLE_ATT_F_READ,
+                      .access_cb = report_ref_cb,
+                      .arg = (void *)report_ref_mouse },
+                    { 0 },
+                },
+            },
+            { 0 },
+        },
+    },
+    {   /* Battery Service */
+        .type = BLE_GATT_SVC_TYPE_PRIMARY,
+        .uuid = &uuid_svc_bat.u,
+        .characteristics = (struct ble_gatt_chr_def[]) {
+            { .uuid = &uuid_chr_battery.u,
+              .access_cb = battery_cb,
+              .flags = BLE_GATT_CHR_F_READ },
+            { 0 },
+        },
+    },
+    { 0 },
+};
+
+/* ---------------- GAP ---------------- */
+
+static int gap_event_cb(struct ble_gap_event *event, void *arg)
+{
+    switch (event->type) {
+    case BLE_GAP_EVENT_CONNECT:
+        if (event->connect.status == 0) {
+            s_connected = true;
+            s_conn_handle = event->connect.conn_handle;
+            ESP_LOGI(TAG, "PC connected (HID ready)");
+        } else {
+            adv_start();
+        }
+        return 0;
+    case BLE_GAP_EVENT_DISCONNECT:
+        s_connected = false;
+        s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+        ESP_LOGI(TAG, "PC disconnected, reason=%d, advertising", event->disconnect.reason);
+        adv_start();
+        return 0;
+    case BLE_GAP_EVENT_ADV_COMPLETE:
+        adv_start();
+        return 0;
+    default:
+        return 0;
+    }
+}
+
+static void adv_start(void)
+{
+    struct ble_hs_adv_fields fields;
+    memset(&fields, 0, sizeof(fields));
+
+    fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
+    fields.appearance = HID_APPEARANCE;
+    fields.uuids16 = (ble_uuid16_t[]) { BLE_UUID16_INIT(0x1812) };
+    fields.num_uuids16 = 1;
+    fields.uuids16_is_complete = 1;
+    const char *name = ble_svc_gap_device_name();
+    fields.name = (uint8_t *)name;
+    fields.name_len = strlen(name);
+    fields.name_is_complete = 1;
+
+    int rc = ble_gap_adv_set_fields(&fields);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "adv set fields failed rc=%d", rc);
+        return;
+    }
+
+    struct ble_gap_adv_params params = { 0 };
+    params.conn_mode = BLE_GAP_CONN_MODE_UND;
+    params.disc_mode = BLE_GAP_DISC_MODE_GEN;
+    params.itvl_min = 40;   /* 25ms */
+    params.itvl_max = 80;   /* 50ms */
+    rc = ble_gap_adv_start(s_own_addr_type, NULL, BLE_HS_FOREVER, &params, gap_event_cb, NULL);
+    if (rc != 0 && rc != BLE_HS_EALREADY) {
+        ESP_LOGE(TAG, "adv start failed rc=%d", rc);
+    }
+}
+
+static void on_sync(void)
+{
+    int rc = ble_hs_util_ensure_addr(0);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "ensure addr failed rc=%d", rc);
+        return;
+    }
+    ble_hs_id_infer_auto(0, &s_own_addr_type);
+    adv_start();
+    ESP_LOGI(TAG, "BLE HID ready, pairing name: %s", HID_DEV_NAME);
+}
+
+static void on_reset(int reason)
+{
+    ESP_LOGW(TAG, "host reset, reason=%d", reason);
+}
+
+static void host_task(void *param)
+{
+    nimble_port_run();              /* 阻塞至 nimble_port_stop */
+    nimble_port_freertos_deinit();
+}
+
+/* ---------------- 报告发送 ---------------- */
+
+static void notify(uint16_t handle, const uint8_t *data, size_t len)
+{
+    if (!s_connected || s_conn_handle == BLE_HS_CONN_HANDLE_NONE) {
+        return;
+    }
+    struct os_mbuf *om = ble_hs_mbuf_from_flat(data, len);
+    if (!om) {
+        return;
+    }
+    ble_gatts_notify_custom(s_conn_handle, handle, om);
+}
+
+/* ---------------- 公共 API ---------------- */
+
+bool blehid_is_connected(void)
+{
+    return s_connected;
+}
+
+void blehid_consumer_send(uint16_t usage)
+{
+    if (!s_connected) {
+        return;
+    }
+    uint8_t press[3] = { 0x01, (uint8_t)(usage & 0xFF), (uint8_t)(usage >> 8) };
+    uint8_t release[3] = { 0x01, 0x00, 0x00 };
+    notify(h_consumer_report, press, 3);
+    vTaskDelay(pdMS_TO_TICKS(8));
+    notify(h_consumer_report, release, 3);
+}
+
+void blehid_mouse_scroll(int8_t wheel)
+{
+    uint8_t report[5] = { 0x02, 0x00, 0x00, 0x00, (uint8_t)wheel };
+    notify(h_mouse_report, report, 5);
+}
+
+void blehid_mouse_move(int8_t dx, int8_t dy)
+{
+    uint8_t report[5] = { 0x02, 0x00, (uint8_t)dx, (uint8_t)dy, 0x00 };
+    notify(h_mouse_report, report, 5);
+}
+
+esp_err_t blehid_init(void)
+{
+    if (s_inited) {
+        return ESP_OK;
+    }
+    ESP_RETURN_ON_ERROR(nimble_port_init(), TAG, "nimble port init failed");
+
+    ble_hs_cfg.sync_cb = on_sync;
+    ble_hs_cfg.reset_cb = on_reset;
+    /* Just Works 配对 + 绑定(NVS 持久化, 断线重连免配对) */
+    ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_NO_IO;
+    ble_hs_cfg.sm_bonding = 1;
+    ble_hs_cfg.sm_mitm = 0;
+    ble_hs_cfg.sm_sc = 1;
+    ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+    ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+
+    ble_svc_gap_device_name_set(HID_DEV_NAME);
+    ble_svc_gap_init();
+    ble_svc_gatt_init();
+
+    int rc = ble_gatts_count_cfg(gatt_svcs);
+    rc |= ble_gatts_add_svcs(gatt_svcs);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "gatts add svcs failed rc=%d", rc);
+        return ESP_FAIL;
+    }
+
+    /* 绑定信息持久化: CONFIG_BT_NIMBLE_NVS_PERSIST=y 时由 IDF 自动注册 */
+
+    nimble_port_freertos_init(host_task);
+    s_inited = true;
+    ESP_LOGI(TAG, "BLE HID initializing (device: %s)", HID_DEV_NAME);
+    return ESP_OK;
+}
