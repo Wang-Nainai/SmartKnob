@@ -305,6 +305,7 @@ static void status_bar_create(void)
     lv_obj_set_style_text_font(sb_back_btn, &lv_font_montserrat_14, 0);
     lv_label_set_text(sb_back_btn, LV_SYMBOL_LEFT);
     lv_obj_align(sb_back_btn, LV_ALIGN_LEFT_MID, 4, 0);
+    lv_obj_set_ext_click_area(sb_back_btn, 12);   /* 14px 符号太小, 扩大触摸热区 */
     lv_obj_add_event_cb(sb_back_btn, sb_back_cb, LV_EVENT_CLICKED, NULL);
 
     sb_title = lv_label_create(bar);

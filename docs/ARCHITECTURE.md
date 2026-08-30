@@ -125,6 +125,21 @@ components/
   点中心=播放暂停，底部按钮=上下曲；状态栏蓝牙图标显示连接状态。
 - 启用成本：固件 +340KB（应用分区已扩至 3MB×3，余 37%）。
 
+## 10. 工具链（tools/）
+
+| 脚本 | 用途 |
+|---|---|
+| `build.ps1` | 一键构建（含完整 ESP-IDF 环境变量） |
+| `gen_msyh_font.py` | 中文字库生成：自动扫描 UI 文案 → msyh.ttc 渲染 → LVGL 4bpp 字库。**新增文案后必须重跑** |
+| `check_glyphs.py` | 校验 UI 用字是否全部被字库覆盖（缺失时报出码点与文件） |
+
+## 11. 字库管线（lv_font_msyh_16）
+
+- 格式：LVGL FMT_TXT / PLAIN 4bpp / SPARSE_TINY（unicode_list 升序，二分查找）
+- 度量约定：`ofs_y = ascent - bbox_top - box_h`（与 LVGL
+  `lv_draw_label.c` 定位公式核对一致），`adv_w` 单位 1/16 像素
+- 字符集：自动 = UI 全部用字 + ASCII + ° · ；当前 215 字形
+
 ## 8. 触摸子系统（自研 XPT2046 驱动）
 
 第三方 `atanisoft/esp_lcd_touch_xpt2046` 存在 XY 命令字标反的缺陷（BUG-009），
