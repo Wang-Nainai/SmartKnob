@@ -174,6 +174,12 @@ static void pg_menu_on_back(page_t *p)
     /* root page, nothing to pop */
 }
 
+static void pg_menu_on_resume(page_t *p)
+{
+    /* 从子页返回: 恢复菜单浏览手感(子页可能改过电机模式) */
+    motor_set_mode(MOTOR_MODE_COARSE_STRONG_DETENTS, 0, 0);
+}
+
 static void pg_menu_on_tick(page_t *p)
 {
 }
@@ -184,4 +190,5 @@ const page_ops_t pg_menu_ops = {
     .on_rotate = pg_menu_on_rotate,
     .on_back = pg_menu_on_back,
     .on_tick = pg_menu_on_tick,
+    .on_resume = pg_menu_on_resume,
 };

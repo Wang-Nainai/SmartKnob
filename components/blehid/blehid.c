@@ -108,9 +108,10 @@ static int proto_mode_cb(uint16_t conn, uint16_t attr, struct ble_gatt_access_ct
 
 static int report_read_cb(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
-    /* 输入报告读取返回全 0 (无按键/无移动) */
+    /* 输入报告读取返回全 0 (无按键/无移动); 长度与报告描述符一致 */
+    uint8_t len = (uint8_t)(uintptr_t)arg;
     static const uint8_t zero5[5] = {0};
-    return os_mbuf_append(ctxt->om, zero5, 5);
+    return os_mbuf_append(ctxt->om, zero5, len);
 }
 
 static int report_ref_cb(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg)
@@ -149,6 +150,7 @@ static const struct ble_gatt_svc_def gatt_svcs[] = {
             {   /* Input Report: Consumer Control */
                 .uuid = &uuid_chr_report.u,
                 .access_cb = report_read_cb,
+                .arg = (void *)(uintptr_t)3,   /* {id, usage_lo, usage_hi} */
                 .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
                 .val_handle = &h_consumer_report,
                 .descriptors = (struct ble_gatt_dsc_def[]) {
@@ -162,6 +164,7 @@ static const struct ble_gatt_svc_def gatt_svcs[] = {
             {   /* Input Report: Mouse */
                 .uuid = &uuid_chr_report.u,
                 .access_cb = report_read_cb,
+                .arg = (void *)(uintptr_t)5,   /* {id, buttons, dx, dy, wheel} */
                 .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
                 .val_handle = &h_mouse_report,
                 .descriptors = (struct ble_gatt_dsc_def[]) {
@@ -223,6 +226,7 @@ static void adv_start(void)
 
     fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
     fields.appearance = HID_APPEARANCE;
+    fields.appearance_is_present = 1;
     fields.uuids16 = (ble_uuid16_t[]) { BLE_UUID16_INIT(0x1812) };
     fields.num_uuids16 = 1;
     fields.uuids16_is_complete = 1;

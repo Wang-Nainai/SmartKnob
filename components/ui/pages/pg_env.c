@@ -187,5 +187,6 @@ const page_ops_t pg_env_ops = {
     .destroy = pg_env_destroy,
     .on_rotate = pg_env_on_rotate,
     .on_back = pg_env_on_back,
+    .on_resume = NULL,
     .on_tick = pg_env_on_tick,
 };

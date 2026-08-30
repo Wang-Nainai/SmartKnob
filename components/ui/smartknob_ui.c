@@ -123,6 +123,13 @@ static void pm_pop_anim_done(lv_anim_t *a)
     page_t *p = (page_t *)a->user_data;
     pm_animating = false;
     pm_delete_page(p);
+
+    /* 恢复新栈顶页面的可见状态(如电机手感模式), 并同步旋钮基准 */
+    page_t *top = pm_top();
+    if (top && top->ops->on_resume) {
+        top->ops->on_resume(top);
+    }
+    knob_input_reset();
 }
 
 static page_t *pm_create_page(page_id_t id)

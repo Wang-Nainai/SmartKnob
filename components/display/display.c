@@ -220,6 +220,15 @@ static void tp_poll(void)
     s_tp.raw_z1 = z1;
     s_tp.raw_z2 = z2;
 
+    /* 总线异常防护: 芯片缺失/接线故障时 MISO 悬空, 读数恒 0 或 0xFFF,
+     * 此时 pressure 恒为 4095, 会产生持续的幽灵触摸, 必须判无效 */
+    if ((z1 >= 4090 && z2 >= 4090) || (z1 <= 5 && z2 <= 5)) {
+        s_tp.touched = false;
+        s_tp.raw_x = 0;
+        s_tp.raw_y = 0;
+        return;
+    }
+
     if (pressure < CONFIG_TOUCH_Z_THRESHOLD) {
         s_tp.touched = false;
         s_tp.raw_x = 0;
@@ -248,6 +257,12 @@ static void tp_poll(void)
 
     s_tp.raw_x = rx;
     s_tp.raw_y = ry;
+
+    /* 坐标有效性窗口(参照通用触摸库: 50 < raw < 4045) */
+    if (rx < 50 || rx > 4045 || ry < 50 || ry > 4045) {
+        s_tp.touched = false;
+        return;
+    }
     s_tp.touched = true;
 
     uint16_t mx = tp_map(rx, CONFIG_TOUCH_X_MIN, CONFIG_TOUCH_X_MAX, LCD_H_RES);

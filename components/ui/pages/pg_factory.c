@@ -301,10 +301,16 @@ static void pg_factory_on_tick(page_t *p)
 {
 }
 
+static void pg_factory_on_resume(page_t *p)
+{
+    motor_set_mode(MOTOR_MODE_COARSE_STRONG_DETENTS, 0, 0);
+}
+
 const page_ops_t pg_factory_ops = {
     .create = pg_factory_create,
     .destroy = pg_factory_destroy,
     .on_rotate = pg_factory_on_rotate,
     .on_back = pg_factory_on_back,
     .on_tick = pg_factory_on_tick,
+    .on_resume = pg_factory_on_resume,
 };

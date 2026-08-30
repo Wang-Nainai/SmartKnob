@@ -16,7 +16,7 @@
 static const char *TAG = "webcfg";
 
 #define CFG_NAMESPACE "webcfg"
-#define OTA_MAX_SIZE   0x900000  /* 9 MB, app partition is 8 MB */
+#define OTA_MAX_SIZE   0x300000  /* app 分区 3MB */
 
 static webcfg_apply_cb_t s_apply_cb = NULL;
 static httpd_handle_t s_server = NULL;

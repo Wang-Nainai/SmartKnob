@@ -214,5 +214,6 @@ const page_ops_t pg_pcdial_ops = {
     .destroy = pg_pcdial_destroy,
     .on_rotate = pg_pcdial_on_rotate,
     .on_back = pg_pcdial_on_back,
+    .on_resume = NULL,
     .on_tick = pg_pcdial_on_tick,
 };

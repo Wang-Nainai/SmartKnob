@@ -323,6 +323,18 @@ static void pg_setting_on_back(page_t *p)
     }
 }
 
+static void pg_setting_on_resume(page_t *p)
+{
+    setting_data_t *d = p->data;
+    if (d->edit_item == SET_BRIGHTNESS) {
+        motor_set_mode_range(MOTOR_MODE_FINE_DETENTS, 10, 100, d->brightness);
+    } else if (d->edit_item == SET_TIMEOUT) {
+        motor_set_mode_range(MOTOR_MODE_FINE_DETENTS, 0, 30, d->timeout_min);
+    } else {
+        motor_set_mode(MOTOR_MODE_COARSE_STRONG_DETENTS, 0, 0);
+    }
+}
+
 static void pg_setting_on_tick(page_t *p)
 {
 }
@@ -333,4 +345,5 @@ const page_ops_t pg_setting_ops = {
     .on_rotate = pg_setting_on_rotate,
     .on_back = pg_setting_on_back,
     .on_tick = pg_setting_on_tick,
+    .on_resume = pg_setting_on_resume,
 };

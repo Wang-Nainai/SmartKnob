@@ -229,10 +229,17 @@ static void pg_playground_on_tick(page_t *p)
 {
 }
 
+static void pg_playground_on_resume(page_t *p)
+{
+    /* 重新应用当前手感模式(子页/返回链路可能改过电机模式) */
+    pg_apply_mode((pg_data_t *)p->data);
+}
+
 const page_ops_t pg_playground_ops = {
     .create = pg_playground_create,
     .destroy = pg_playground_destroy,
     .on_rotate = pg_playground_on_rotate,
     .on_back = pg_playground_on_back,
     .on_tick = pg_playground_on_tick,
+    .on_resume = pg_playground_on_resume,
 };

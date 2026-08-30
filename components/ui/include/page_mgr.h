@@ -23,13 +23,16 @@ typedef struct page page_t;
  *   - 旋钮旋转 → on_rotate(steps): 浏览/调节 (steps>0 顺时针)
  *   - 触摸返回按钮 → on_back
  *   - 页面内控件触摸 → 页面自行注册 LVGL 事件 (进入/确认/切换)
- * 不再依赖"快旋确认/反快旋返回"手势(易误判, 见 BUG-003)。 */
+ * 不再依赖"快旋确认/反快旋返回"手势(易误判, 见 BUG-003)。
+ * on_resume: 从子页面返回、本页重新成为栈顶时调用
+ * (用于重新声明电机手感模式等"页面可见状态")。 */
 typedef struct {
     void (*create)(page_t *p);
     void (*destroy)(page_t *p);
     void (*on_rotate)(page_t *p, int32_t steps);
     void (*on_back)(page_t *p);
     void (*on_tick)(page_t *p);
+    void (*on_resume)(page_t *p);
 } page_ops_t;
 
 typedef struct page {

@@ -280,6 +280,13 @@ static void pg_hass_on_back(page_t *p)
     }
 }
 
+static void pg_hass_on_resume(page_t *p)
+{
+    hass_data_t *d = p->data;
+    motor_set_mode(d->in_control ? MOTOR_MODE_UNBOUND_NO_DETENTS
+                                 : MOTOR_MODE_COARSE_STRONG_DETENTS, 0, 0);
+}
+
 static void pg_hass_on_tick(page_t *p)
 {
 }
@@ -290,4 +297,5 @@ const page_ops_t pg_hass_ops = {
     .on_rotate = pg_hass_on_rotate,
     .on_back = pg_hass_on_back,
     .on_tick = pg_hass_on_tick,
+    .on_resume = pg_hass_on_resume,
 };

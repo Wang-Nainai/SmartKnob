@@ -82,5 +82,6 @@ const page_ops_t pg_startup_ops = {
     .destroy = pg_startup_destroy,
     .on_rotate = NULL,
     .on_back = NULL,
+    .on_resume = NULL,
     .on_tick = NULL,
 };

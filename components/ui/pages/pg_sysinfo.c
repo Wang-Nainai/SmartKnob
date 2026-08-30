@@ -130,5 +130,6 @@ const page_ops_t pg_sysinfo_ops = {
     .destroy = pg_sysinfo_destroy,
     .on_rotate = pg_sysinfo_on_rotate,
     .on_back = pg_sysinfo_on_back,
+    .on_resume = NULL,
     .on_tick = pg_sysinfo_on_tick,
 };
