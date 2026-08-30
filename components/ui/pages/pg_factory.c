@@ -229,10 +229,10 @@ static void pg_factory_create(page_t *p)
     lv_label_set_text(d->status, "\xE7\x82\xB9\xE5\x87\xBB\xE6\x89\xA7\xE8\xA1\x8C\xE6\xB5\x8B\xE8\xAF\x95");
     lv_obj_align(d->status, LV_ALIGN_BOTTOM_MID, 0, -10);
 
-    /* 触摸测试全屏视图 */
+    /* 触摸测试全屏视图 (y=22 起, 高 298, 恰好铺满页面不产生滚动) */
     d->touch_scr = lv_obj_create(p->root);
     lv_obj_remove_style_all(d->touch_scr);
-    lv_obj_set_size(d->touch_scr, 240, 320);
+    lv_obj_set_size(d->touch_scr, 240, 298);
     lv_obj_set_pos(d->touch_scr, 0, 22);
     lv_obj_set_style_bg_color(d->touch_scr, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(d->touch_scr, LV_OPA_COVER, 0);
@@ -254,6 +254,7 @@ static void pg_factory_create(page_t *p)
 
     d->timer = lv_timer_create(factory_timer_cb, 500, d);
     motor_set_mode(MOTOR_MODE_COARSE_STRONG_DETENTS, 0, 0);
+    lv_obj_remove_flag(p->root, LV_OBJ_FLAG_SCROLLABLE);
 }
 
 static void pg_factory_destroy(page_t *p)

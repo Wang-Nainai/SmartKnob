@@ -101,6 +101,7 @@ static void pg_sysinfo_create(page_t *p)
     lv_obj_set_user_data(entry, p);
     lv_obj_add_event_cb(entry, sysinfo_factory_cb, LV_EVENT_CLICKED, NULL);
 
+    lv_obj_remove_flag(p->root, LV_OBJ_FLAG_SCROLLABLE);
     sysinfo_update(d);
     motor_set_mode(MOTOR_MODE_UNBOUND_NO_DETENTS, 0, 0);
 }

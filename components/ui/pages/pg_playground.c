@@ -178,6 +178,9 @@ static void pg_playground_create(page_t *p)
     lv_obj_set_style_line_color(d->needle, lv_color_hex(XK_COLOR_BLUE), 0);
     lv_scale_set_post_draw(d->scale, true);
     lv_scale_set_line_needle_value(d->scale, d->needle, 95, 0);
+    /* 关键: scale 默认可点击且点击不冒泡, 会吞掉整页"点击切换模式" */
+    lv_obj_remove_flag(d->scale, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(p->root, LV_OBJ_FLAG_SCROLLABLE);
 
     /* out-of-bounds red arc overlay */
     d->arc = lv_arc_create(p->root);

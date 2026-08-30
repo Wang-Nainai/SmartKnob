@@ -37,6 +37,7 @@ static const char *device_icons[HASS_DEVICE_NUM] = {
 typedef struct {
     int focus;
     bool in_control;
+    lv_obj_t *list;         /* 设备列表滚动容器 */
     lv_obj_t *rows[HASS_DEVICE_NUM];
     lv_obj_t *icons[HASS_DEVICE_NUM];
     lv_obj_t *ctrl_scr;     /* 控制视图 */
@@ -66,9 +67,6 @@ static void hass_show_control(hass_data_t *d, bool ctrl)
 {
     d->in_control = ctrl;
     if (ctrl) {
-        for (int i = 0; i < HASS_DEVICE_NUM; i++) {
-            lv_obj_add_flag(d->rows[i], LV_OBJ_FLAG_HIDDEN);
-        }
         char buf[64];
         snprintf(buf, sizeof(buf), "%s / %d", device_names[d->focus], d->focus + 1);
         lv_label_set_text(d->label_name, buf);
@@ -77,9 +75,6 @@ static void hass_show_control(hass_data_t *d, bool ctrl)
         motor_set_mode(MOTOR_MODE_UNBOUND_NO_DETENTS, 0, 0);
     } else {
         lv_obj_add_flag(d->ctrl_scr, LV_OBJ_FLAG_HIDDEN);
-        for (int i = 0; i < HASS_DEVICE_NUM; i++) {
-            lv_obj_clear_flag(d->rows[i], LV_OBJ_FLAG_HIDDEN);
-        }
         motor_set_mode(MOTOR_MODE_COARSE_STRONG_DETENTS, 0, 0);
     }
 }
@@ -128,13 +123,18 @@ static void pg_hass_create(page_t *p)
     d->in_control = false;
     p->title = "\xE6\x99\xBA\xE8\x83\xBD\xE5\xAE\xB6\xE5\xB1\x85";
 
-    /* ---- 设备列表 (X-Knob 聚焦展开行) ---- */
-    lv_obj_set_flex_flow(p->root, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(p->root, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_ver(p->root, LIST_PAD, 0);
+    /* 设备列表: 独立滚动容器(flex), 控制视图作为根上浮层, 互不影响 */
+    lv_obj_t *list = lv_obj_create(p->root);
+    lv_obj_remove_style_all(list);
+    lv_obj_set_size(list, 240, 320);
+    lv_obj_set_pos(list, 0, 0);
+    d->list = list;
+    lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_ver(list, LIST_PAD, 0);
 
     for (int i = 0; i < HASS_DEVICE_NUM; i++) {
-        lv_obj_t *row = lv_obj_create(p->root);
+        lv_obj_t *row = lv_obj_create(list);
         lv_obj_remove_style_all(row);
         lv_obj_set_size(row, 220, ROW_H);
         lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
@@ -228,6 +228,8 @@ static void pg_hass_create(page_t *p)
     lv_obj_set_style_line_color(d->needle, lv_color_hex(XK_COLOR_BLUE), 0);
     lv_scale_set_post_draw(scale, true);
     lv_scale_set_line_needle_value(scale, d->needle, 95, 0);
+    /* scale 默认可点击且不冒泡, 会吞掉控制视图的"点击=ON/OFF" */
+    lv_obj_remove_flag(scale, LV_OBJ_FLAG_CLICKABLE);
 
     d->label_name = lv_label_create(d->ctrl_scr);
     lv_obj_set_style_text_color(d->label_name, lv_color_hex(XK_COLOR_TEXT), 0);

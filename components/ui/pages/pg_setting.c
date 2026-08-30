@@ -27,6 +27,7 @@ typedef struct {
     int edit_item;          /* -1 = 列表, 否则 0/1 */
     int32_t brightness;
     int32_t timeout_min;
+    lv_obj_t *list;         /* 设置列表滚动容器 */
     lv_obj_t *rows[2];
     lv_obj_t *icons[2];
     lv_obj_t *val_labels[2];
@@ -62,8 +63,6 @@ static void setting_refresh_rows(setting_data_t *d)
 static void setting_show_edit(setting_data_t *d, int item)
 {
     d->edit_item = item;
-    lv_obj_add_flag(d->rows[0], LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(d->rows[1], LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(d->edit_scr, LV_OBJ_FLAG_HIDDEN);
 
     int32_t init = item == SET_BRIGHTNESS ? d->brightness : d->timeout_min;
@@ -90,8 +89,6 @@ static void setting_exit_edit(setting_data_t *d, bool save)
     }
     d->edit_item = -1;
     lv_obj_add_flag(d->edit_scr, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(d->rows[0], LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(d->rows[1], LV_OBJ_FLAG_HIDDEN);
     setting_refresh_rows(d);
     motor_set_mode(MOTOR_MODE_COARSE_STRONG_DETENTS, 0, 0);
     pm_shake();
@@ -161,12 +158,18 @@ static void pg_setting_create(page_t *p)
         "\xE8\x87\xAA\xE5\x8A\xA8\xE7\x86\x84\xE5\xB1\x8F" "\n0 - 30 \xE5\x88\x86\xE9\x92\x9F",
     };
 
-    lv_obj_set_flex_flow(p->root, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(p->root, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_ver(p->root, LIST_PAD, 0);
+    /* 列表: 独立滚动容器(flex), 编辑视图作为根上浮层, 互不影响 */
+    lv_obj_t *list = lv_obj_create(p->root);
+    lv_obj_remove_style_all(list);
+    lv_obj_set_size(list, 240, 320);
+    lv_obj_set_pos(list, 0, 0);
+    d->list = list;
+    lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_ver(list, LIST_PAD, 0);
 
     for (int i = 0; i < 2; i++) {
-        lv_obj_t *row = lv_obj_create(p->root);
+        lv_obj_t *row = lv_obj_create(list);
         lv_obj_remove_style_all(row);
         lv_obj_set_size(row, 220, ROW_H);
         lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
@@ -266,6 +269,8 @@ static void pg_setting_create(page_t *p)
     lv_obj_set_style_line_color(d->needle, lv_color_hex(XK_COLOR_ORANGE), 0);
     lv_scale_set_post_draw(d->scale, true);
     lv_scale_set_line_needle_value(d->scale, d->needle, 95, 0);
+    /* scale 默认可点击且不冒泡, 会吞掉编辑视图的"点击=保存" */
+    lv_obj_remove_flag(d->scale, LV_OBJ_FLAG_CLICKABLE);
 
     d->label_value = lv_label_create(d->edit_scr);
     lv_obj_set_style_text_color(d->label_value, lv_color_hex(XK_COLOR_TEXT), 0);

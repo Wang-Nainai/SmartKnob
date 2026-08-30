@@ -63,7 +63,7 @@ static void env_timer_cb(lv_timer_t *t)
         lv_label_set_text(d->label_level, env_level_name(d->co2));
         lv_obj_set_style_text_color(d->label_level, lv_color_hex(env_level_color(d->co2)), 0);
 
-        snprintf(buf, sizeof(buf), "\xE6\xB8\xA9\xE5\xBA\xA6 %.1f\xB0" "C    \xE6\xB9\xBF\xE5\xBA\xA6 %.0f%%",
+        snprintf(buf, sizeof(buf), "\xE6\xB8\xA9\xE5\xBA\xA6 %.1f\xC2\xB0" "C    \xE6\xB9\xBF\xE5\xBA\xA6 %.0f%%",
                  d->temp, d->rh);
         lv_label_set_text(d->label_sub, buf);
     } else {
@@ -144,6 +144,7 @@ static void pg_env_create(page_t *p)
     lv_label_set_text(d->label_sub, "SCD40");
     lv_obj_align(d->label_sub, LV_ALIGN_CENTER, 0, 190);
 
+    lv_obj_remove_flag(p->root, LV_OBJ_FLAG_SCROLLABLE);
     d->timer = lv_timer_create(env_timer_cb, 1000, d);
     motor_set_mode(MOTOR_MODE_UNBOUND_NO_DETENTS, 0, 0);
 }

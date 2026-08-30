@@ -59,9 +59,9 @@ static void pc_apply_rotate(pc_data_t *d, int32_t steps)
         return;
     }
     if (d->mode == PC_MODE_VOLUME) {
-        /* Windows 每个音量报告 = 2 格, 每档发 1 次 */
+        /* Windows 每个音量报告 = 2 格; 单事件最多 2 次(每次 8ms 延时, 避免卡 UI) */
         int n = steps > 0 ? steps : -steps;
-        if (n > 3) n = 3;
+        if (n > 2) n = 2;
         for (int i = 0; i < n; i++) {
             blehid_consumer_send(steps > 0 ? HID_CONSUMER_VOLUME_UP : HID_CONSUMER_VOLUME_DOWN);
         }
@@ -185,6 +185,7 @@ static void pg_pcdial_create(page_t *p)
     lv_label_set_text(hint, "\xE8\x93\x9D\xE7\x89\x99\xE8\xAE\xBE\xE7\xBD\xAE\xE4\xB8\xAD\xE6\x90\x9C\xE7\xB4\xA2 SmartKnob");
     lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -8);
 
+    lv_obj_remove_flag(p->root, LV_OBJ_FLAG_SCROLLABLE);
     motor_set_mode(MOTOR_MODE_UNBOUND_NO_DETENTS, 0, 0);
 }
 
