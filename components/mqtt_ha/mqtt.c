@@ -8,6 +8,7 @@
 #include "webcfg.h"
 #include "led.h"
 #include "motor.h"
+#include "freertos/semphr.h"
 #include <stdlib.h>
 
 static const char *TAG = "mqtt";
@@ -23,6 +24,9 @@ void mqtt_ha_publish_cmd(const char *device, const char *cmd) { (void)device; (v
 
 static esp_mqtt_client_handle_t s_client = NULL;
 static volatile bool s_connected = false;
+/* s_client 生命周期互斥: reinit(httpd 任务, stop/destroy) 与
+ * publish(scd40/LVGL 任务) 并发时的 use-after-free 防护 */
+static SemaphoreHandle_t s_client_mux = NULL;
 static volatile uint16_t s_co2 = 0;
 static volatile float s_temp = 0.0f;
 static volatile float s_rh = 0.0f;
@@ -182,7 +186,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     }
 }
 
-static void mqtt_client_start(void)
+static void client_start_locked(void)
 {
     esp_mqtt_client_config_t cfg = {
         .broker.address.uri = NULL,
@@ -215,31 +219,46 @@ static void mqtt_client_start(void)
 
 void mqtt_ha_init(void)
 {
-    if (s_client) {
-        return;   /* 幂等: 断网场景 esp-mqtt 自带重连 */
+    if (!s_client_mux) {
+        s_client_mux = xSemaphoreCreateMutex();
     }
-    mqtt_client_start();
+    xSemaphoreTake(s_client_mux, portMAX_DELAY);
+    if (!s_client) {
+        client_start_locked();
+    }
+    xSemaphoreGive(s_client_mux);
 }
 
 void mqtt_ha_reinit(void)
 {
+    if (!s_client_mux) {
+        return;
+    }
+    xSemaphoreTake(s_client_mux, portMAX_DELAY);
     if (s_client) {
         esp_mqtt_client_stop(s_client);
         esp_mqtt_client_destroy(s_client);
         s_client = NULL;
     }
     s_connected = false;
-    mqtt_client_start();
+    client_start_locked();
+    xSemaphoreGive(s_client_mux);
 }
 
 void mqtt_ha_publish(uint16_t co2_ppm, float temp_c, float humidity_pct)
 {
-    if (!s_connected || !s_client) return;
+    if (!s_connected || !s_client_mux) {
+        return;
+    }
     s_co2 = co2_ppm;
     s_temp = temp_c;
     s_rh = humidity_pct;
     s_has_data = 1;
-    publish_state(s_client);
+    xSemaphoreTake(s_client_mux, portMAX_DELAY);
+    if (s_connected && s_client) {
+        publish_state(s_client);
+    }
+    xSemaphoreGive(s_client_mux);
 }
 
 bool mqtt_ha_is_connected(void)
@@ -249,15 +268,19 @@ bool mqtt_ha_is_connected(void)
 
 void mqtt_ha_publish_cmd(const char *device, const char *cmd)
 {
-    if (!s_connected || !s_client || !device || !cmd) {
+    if (!s_connected || !s_client_mux || !device || !cmd) {
         return;
     }
-    char topic[192];
-    char prefix[64] = {0};
-    webcfg_get_str("mqtt_topic", prefix, sizeof(prefix), CONFIG_MQTT_HA_TOPIC);
-    snprintf(topic, sizeof(topic), "%s/HOME/%s", prefix, device);
-    esp_mqtt_client_publish(s_client, topic, cmd, strlen(cmd), 1, 0);
-    ESP_LOGI(TAG, "publish %s -> %s", topic, cmd);
+    xSemaphoreTake(s_client_mux, portMAX_DELAY);
+    if (s_connected && s_client) {
+        char topic[192];
+        char prefix[64] = {0};
+        webcfg_get_str("mqtt_topic", prefix, sizeof(prefix), CONFIG_MQTT_HA_TOPIC);
+        snprintf(topic, sizeof(topic), "%s/HOME/%s", prefix, device);
+        esp_mqtt_client_publish(s_client, topic, cmd, strlen(cmd), 1, 0);
+        ESP_LOGI(TAG, "publish %s -> %s", topic, cmd);
+    }
+    xSemaphoreGive(s_client_mux);
 }
 
 /* HA 设备自动化动作: dev_idx(0-3) + cmd("ON"/"OFF"/"LEFT"/"RIGHT")
@@ -265,7 +288,7 @@ void mqtt_ha_publish_cmd(const char *device, const char *cmd)
  * 可在自动化里绑定到任意实体 —— 旋钮直接控制 HA 设备的标准通道 */
 void mqtt_ha_publish_action(int dev_idx, const char *cmd)
 {
-    if (!s_connected || !s_client || dev_idx < 0 || dev_idx >= MQTT_DEV_NUM || !cmd) {
+    if (!s_connected || !s_client_mux || dev_idx < 0 || dev_idx >= MQTT_DEV_NUM || !cmd) {
         return;
     }
     char cmdkey[8] = {0};
@@ -276,7 +299,11 @@ void mqtt_ha_publish_action(int dev_idx, const char *cmd)
     }
     char payload[32];
     snprintf(payload, sizeof(payload), "%s_%s", ha_dev_keys[dev_idx], cmdkey);
-    esp_mqtt_client_publish(s_client, "smartknob/action", payload, 0, 1, 0);
-    ESP_LOGI(TAG, "action: %s", payload);
+    xSemaphoreTake(s_client_mux, portMAX_DELAY);
+    if (s_connected && s_client) {
+        esp_mqtt_client_publish(s_client, "smartknob/action", payload, 0, 1, 0);
+        ESP_LOGI(TAG, "action: %s", payload);
+    }
+    xSemaphoreGive(s_client_mux);
 }
 #endif /* CONFIG_MQTT_HA_ENABLE */

@@ -1,5 +1,6 @@
 #include "app_state.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
 
 static const char *TAG = "app_state";
 
@@ -44,6 +45,7 @@ static volatile bool s_wifi_conn = false;
 static volatile bool s_ap_active = false;
 static char s_ap_ssid[33] = "SmartKnob";
 static char s_ap_ip[16] = "192.168.4.1";
+static portMUX_TYPE s_ap_mux = portMUX_INITIALIZER_UNLOCKED;
 
 void app_state_set_wifi(bool connected)
 {
@@ -57,7 +59,9 @@ bool app_state_get_wifi(void)
 
 void app_state_set_ap(bool active, const char *ssid, const char *ip)
 {
-    /* ssid/ip 先写, active 后置(读侧仅在 active 时取字符串) */
+    /* ssid/ip 先写, active 后置(读侧仅在 active 时取字符串);
+     * 字符串拷贝用临界区防止 httpd 任务读取时被并发改写 */
+    portENTER_CRITICAL(&s_ap_mux);
     if (ssid) {
         strncpy(s_ap_ssid, ssid, sizeof(s_ap_ssid) - 1);
         s_ap_ssid[sizeof(s_ap_ssid) - 1] = 0;
@@ -67,10 +71,12 @@ void app_state_set_ap(bool active, const char *ssid, const char *ip)
         s_ap_ip[sizeof(s_ap_ip) - 1] = 0;
     }
     s_ap_active = active;
+    portEXIT_CRITICAL(&s_ap_mux);
 }
 
 bool app_state_get_ap(char *ssid, size_t ssid_len, char *ip, size_t ip_len)
 {
+    portENTER_CRITICAL(&s_ap_mux);
     if (ssid && ssid_len) {
         strncpy(ssid, s_ap_ssid, ssid_len - 1);
         ssid[ssid_len - 1] = 0;
@@ -79,5 +85,7 @@ bool app_state_get_ap(char *ssid, size_t ssid_len, char *ip, size_t ip_len)
         strncpy(ip, s_ap_ip, ip_len - 1);
         ip[ip_len - 1] = 0;
     }
-    return s_ap_active;
+    bool active = s_ap_active;
+    portEXIT_CRITICAL(&s_ap_mux);
+    return active;
 }
