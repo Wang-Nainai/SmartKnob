@@ -261,8 +261,15 @@ static void pg_hass_on_rotate(page_t *p, int32_t steps)
 {
     hass_data_t *d = p->data;
     if (d->in_control) {
+        /* 节流: 快转时最多 10 条/秒, 避免 MQTT 洪泛 */
+        static uint32_t last_cmd_tick = 0;
+        uint32_t now = lv_tick_get();
+        if (now - last_cmd_tick < 100) {
+            return;
+        }
+        last_cmd_tick = now;
         mqtt_ha_publish_cmd(device_names[d->focus], steps > 0 ? "RIGHT" : "LEFT");
-    mqtt_ha_publish_action(d->focus, steps > 0 ? "RIGHT" : "LEFT");
+        mqtt_ha_publish_action(d->focus, steps > 0 ? "RIGHT" : "LEFT");
         lv_label_set_text(d->label_last, steps > 0 ? "RIGHT" : "LEFT");
         pm_shake();
     } else {

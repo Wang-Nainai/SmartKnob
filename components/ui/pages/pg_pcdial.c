@@ -58,8 +58,17 @@ static void pc_apply_rotate(pc_data_t *d, int32_t steps)
     if (!blehid_is_connected()) {
         return;
     }
+    /* 节流: consumer_send 内部有 8ms 延时且在 LVGL 任务执行,
+     * 快转时限制发送频率避免 UI 卡顿/音量飞转 */
+    static uint32_t last_send_tick = 0;
+    uint32_t now = lv_tick_get();
+    if (now - last_send_tick < 40) {
+        return;
+    }
+    last_send_tick = now;
+
     if (d->mode == PC_MODE_VOLUME) {
-        /* Windows 每个音量报告 = 2 格; 单事件最多 2 次(每次 8ms 延时, 避免卡 UI) */
+        /* Windows 每个音量报告 = 2 格; 单事件最多 2 次 */
         int n = steps > 0 ? steps : -steps;
         if (n > 2) n = 2;
         for (int i = 0; i < n; i++) {

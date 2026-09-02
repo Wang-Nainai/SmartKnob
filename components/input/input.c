@@ -28,6 +28,7 @@ static void knob_input_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(20));
     }
     int32_t last_pos = motor_get_position();
+    uint32_t last_seq = motor_get_mode_seq();
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(CONFIG_KNOB_INPUT_POLL_MS));
@@ -36,10 +37,23 @@ static void knob_input_task(void *arg)
             s_resync = false;
             xQueueReset(s_evt_queue);
             last_pos = motor_get_position();
+            last_seq = motor_get_mode_seq();
             continue;
         }
 
+        /* seqlock 式三读: 电机任务应用新模式/位置会递增 seq,
+         * 检测到变更即静默重同步 —— 页面切换的异步模式应用
+         * 不会产生幽灵旋转事件 */
+        uint32_t seq1 = motor_get_mode_seq();
         int32_t pos = motor_get_position();
+        uint32_t seq2 = motor_get_mode_seq();
+        if (seq1 != seq2 || seq1 != last_seq) {
+            last_seq = seq2;
+            last_pos = pos;
+            xQueueReset(s_evt_queue);
+            continue;
+        }
+
         int32_t d = pos - last_pos;
         if (d == 0) {
             continue;

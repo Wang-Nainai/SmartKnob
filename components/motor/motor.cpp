@@ -191,6 +191,8 @@ static volatile int32_t snap_position = 0;
 static volatile int32_t snap_mode = MOTOR_MODE_COARSE_STRONG_DETENTS;
 static volatile float snap_angle_offset_deg = 0.0f;
 static volatile bool snap_ready = false;
+/* 模式/位置被外部重置时递增: input 组件据此静默重同步(防幽灵旋转) */
+static volatile uint32_t snap_seq = 0;
 
 /* 力反馈算法常量（scottbez1 smartknob） */
 static const float DEAD_ZONE_DETENT_PERCENT = 0.2;
@@ -248,6 +250,11 @@ motor_mode_t motor_get_mode(void)
 float motor_get_angle_offset_deg(void)
 {
     return snap_angle_offset_deg;
+}
+
+uint32_t motor_get_mode_seq(void)
+{
+    return snap_seq;
 }
 
 int motor_get_mode_count(void)
@@ -309,6 +316,7 @@ static void apply_mode_range(motor_mode_t mode, int32_t min_position, int32_t ma
     snap_mode = mode;
     snap_position = init_position;
     snap_angle_offset_deg = 0.0f;
+    snap_seq = snap_seq + 1;
 
     ESP_LOGI(TAG, "mode=%d range=[%d..%d] pos=%d", mode, min_position, max_position, init_position);
 }
@@ -331,6 +339,7 @@ static void apply_set_position(int32_t position)
     angle_to_detent_center = 0;
     snap_position = position;
     snap_angle_offset_deg = 0.0f;
+    snap_seq = snap_seq + 1;
     publish_position(position);
 }
 

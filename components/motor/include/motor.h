@@ -41,6 +41,9 @@ void motor_disable(void);
 int motor_get_mode_count(void);
 const char *motor_mode_name(int mode);
 float motor_get_angle_offset_deg(void);
+/* 模式/位置重置序列号: 每次模式切换或位置强制设置时递增,
+ * 供 input 组件检测并静默重同步(防页面切换后的幽灵旋转) */
+uint32_t motor_get_mode_seq(void);
 
 #ifdef __cplusplus
 }

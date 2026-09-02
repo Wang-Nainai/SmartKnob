@@ -297,6 +297,7 @@ static void lvgl_touch_cb(lv_indev_t *indev, lv_indev_data_t *data)
         data->point.x = s_tp.x;
         data->point.y = s_tp.y;
         data->state = LV_INDEV_STATE_PRESSED;
+        display_notify_activity();   /* 触摸同样唤醒/重置熄屏计时 */
     } else {
         data->state = LV_INDEV_STATE_RELEASED;
     }

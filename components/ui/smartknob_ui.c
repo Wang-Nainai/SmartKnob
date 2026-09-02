@@ -283,6 +283,9 @@ static void status_bar_update(void)
 /* 状态栏返回按钮触摸回调 */
 static void sb_back_cb(lv_event_t *e)
 {
+    if (pm_busy()) {
+        return;   /* 转场动画期间不触发页面内部逻辑 */
+    }
     page_t *top = pm_top();
     if (top && top->ops->on_back) {
         top->ops->on_back(top);
