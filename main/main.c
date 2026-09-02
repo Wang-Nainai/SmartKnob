@@ -127,14 +127,25 @@ void app_main(void)
     wifi_init();
     init_sntp();
 
-    if (wifi_wait_connected(15000)) {
-        ESP_LOGI(TAG, "Successfully connected to WiFi");
-        webcfg_set_mqtt_connected(false);
-        mqtt_ha_init();
-    } else {
-        ESP_LOGW(TAG, "WiFi connection failed");
-        led_set_color(255, 0, 0);
+    bool wifi_ok = wifi_wait_connected(
+#if CONFIG_WIFI_AP_FALLBACK_ENABLE
+        CONFIG_WIFI_AP_FALLBACK_TIMEOUT_SEC * 1000
+#else
+        30000
+#endif
+    );
+#if CONFIG_WIFI_AP_FALLBACK_ENABLE
+    if (!wifi_ok) {
+        /* STA 超时: 开热点进配网模式, 屏幕自动弹配网页; STA 后台持续重试 */
+        ESP_LOGW(TAG, "WiFi not connected in %ds, starting SoftAP provisioning",
+                 CONFIG_WIFI_AP_FALLBACK_TIMEOUT_SEC);
+        wifi_ap_fallback_start();
     }
+#endif
+    if (wifi_ok) {
+        ESP_LOGI(TAG, "Successfully connected to WiFi");
+    }
+    mqtt_ha_init();   /* 幂等; 断网时 esp-mqtt 自动重试, 联网即接上 */
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(1000));

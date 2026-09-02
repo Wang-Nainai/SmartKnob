@@ -14,4 +14,11 @@ void wifi_get_ip_str(char *buf, size_t len);
 /* Re-read NVS config and reconnect to a (possibly new) AP */
 void wifi_reconnect_with_config(void);
 
+/* SoftAP 配网回退: STA 超时未连上时开热点, 配网成功后自动关闭 */
+void wifi_ap_fallback_start(void);
+void wifi_ap_fallback_stop(void);
+bool wifi_ap_is_active(void);
+void wifi_ap_get_ip_str(char *buf, int buflen);
+const char *wifi_ap_get_ssid(void);
+
 #endif

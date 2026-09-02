@@ -16,6 +16,25 @@ menu "WiFi Configuration"
         int "Max connection retries"
         default 5
         help
-            Maximum number of reconnection attempts.
+            已废弃: 现为无限重连(断网自愈 + AP 配网依赖)。
+
+    config WIFI_AP_FALLBACK_ENABLE
+        bool "Enable SoftAP provisioning fallback"
+        default y
+        help
+            开机等待 STA 连接超时后自动开启热点(配网模式),
+            屏幕显示热点名/IP/二维码, 浏览器打开原管理页改 WiFi。
+            配网成功后热点自动关闭。
+
+    config WIFI_AP_FALLBACK_TIMEOUT_SEC
+        int "SoftAP fallback timeout (seconds)"
+        default 90
+        range 15 600
+        depends on WIFI_AP_FALLBACK_ENABLE
+
+    config WIFI_AP_PASSWORD
+        string "SoftAP password (empty = open network)"
+        default ""
+        depends on WIFI_AP_FALLBACK_ENABLE
 
 endmenu

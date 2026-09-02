@@ -80,12 +80,14 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     case MQTT_EVENT_CONNECTED:
         s_connected = true;
         ESP_LOGI(TAG, "Connected to broker");
+        webcfg_set_mqtt_connected(true);
         led_set_color(0, 255, 255);   /* 青: WiFi+MQTT 就绪 */
         publish_discovery(client);
         publish_state(client);
         break;
     case MQTT_EVENT_DISCONNECTED:
         s_connected = false;
+        webcfg_set_mqtt_connected(false);
         ESP_LOGW(TAG, "Disconnected from broker");
         led_set_color(0, 255, 0);     /* 绿: 仅 WiFi */
         break;
@@ -130,6 +132,9 @@ static void mqtt_client_start(void)
 
 void mqtt_ha_init(void)
 {
+    if (s_client) {
+        return;   /* 幂等: 断网场景 esp-mqtt 自带重连 */
+    }
     mqtt_client_start();
 }
 

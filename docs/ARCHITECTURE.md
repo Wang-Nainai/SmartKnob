@@ -133,6 +133,26 @@ components/
 | `gen_msyh_font.py` | 中文字库生成：自动扫描 UI 文案 → msyh.ttc 渲染 → LVGL 4bpp 字库。**新增文案后必须重跑** |
 | `check_glyphs.py` | 校验 UI 用字是否全部被字库覆盖（缺失时报出码点与文件） |
 
+## 10.1 SoftAP 配网回退（WiFi 超时自动开热点）
+
+```
+开机 → STA 连接(无限重连, 最长等 WIFI_AP_FALLBACK_TIMEOUT_SEC=90s)
+  ├─ 连上 → 正常运行
+  └─ 超时 → wifi_ap_fallback_start():
+       APSTA 模式, 热点 SmartKnob-XXXX(MAC尾缀, 开放网络可配密码),
+       httpd 立即在 0.0.0.0 启动(AP/STA 网段都可达),
+       UI 每 500ms 轮询自动弹出 PAGE_APCFG:
+         热点名 + 二维码(http://192.168.4.1) + 提示
+  用户连热点 → 浏览器扫码/输 IP → 原管理页改 WiFi
+  保存 → STA 用新凭据重连(热点保持) → GOT_IP
+       → wifi_ap_fallback_stop()(切回 STA, 热点关闭)
+       → UI 检测热点关闭自动退出配网页 → MQTT 自动接上
+```
+
+- STA 断连**无限重连**（原 5 次上限废弃），断电恢复/路由器重启均可自愈
+- 热点开放网络（Kconfig `WIFI_AP_PASSWORD` 可设 WPA2）
+- 配网页可点返回键关闭（`ui_apcfg_set_dismissed`），热点保持直到配网成功
+
 ## 11. 字库管线（lv_font_msyh_16）
 
 - 格式：LVGL FMT_TXT / PLAIN 4bpp / SPARSE_TINY（unicode_list 升序，二分查找）

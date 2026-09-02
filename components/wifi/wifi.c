@@ -5,9 +5,11 @@
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_log.h"
+#include "esp_mac.h"
 #include "nvs_flash.h"
 #include "lwip/inet.h"
 #include <string.h>
+#include <stdio.h>
 
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1
@@ -19,18 +21,21 @@ static wifi_callback_t s_on_connected = NULL;
 static wifi_callback_t s_on_disconnected = NULL;
 static esp_ip4_addr_t s_ip_addr;
 
+/* SoftAP 配网回退状态 */
+static bool s_ap_active = false;
+static char s_ap_ssid[33] = "SmartKnob";
+static esp_netif_t *s_ap_netif = NULL;
+
 static void event_handler(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-        if (s_retry_num < CONFIG_ESP_WIFI_MAX_RETRY) {
-            esp_wifi_connect();
-            s_retry_num++;
-            ESP_LOGI(TAG, "retry %d", s_retry_num);
-        } else {
-            xEventGroupSetBits(s_wifi_event, WIFI_FAIL_BIT);
+        s_retry_num++;
+        if (s_retry_num == 1 || s_retry_num % 5 == 0) {
+            ESP_LOGI(TAG, "STA reconnect attempt %d", s_retry_num);
         }
+        esp_wifi_connect();   /* 无限重连: 断网自愈, AP 配网页依赖持续重试 */
         if (s_on_disconnected) s_on_disconnected();
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)data;
@@ -38,6 +43,9 @@ static void event_handler(void *arg, esp_event_base_t base, int32_t id, void *da
         ESP_LOGI(TAG, "connected, IP: " IPSTR, IP2STR(&s_ip_addr));
         s_retry_num = 0;
         xEventGroupSetBits(s_wifi_event, WIFI_CONNECTED_BIT);
+        if (s_ap_active) {
+            wifi_ap_fallback_stop();   /* 配网成功: 自动关闭热点 */
+        }
         if (s_on_connected) s_on_connected();
     }
 }
@@ -64,7 +72,8 @@ static void wifi_apply_config(void)
     webcfg_get_str("wifi_pass", pass, sizeof(pass), CONFIG_ESP_WIFI_PASS);
     strncpy((char *)wifi_config.sta.ssid, ssid, sizeof(wifi_config.sta.ssid) - 1);
     strncpy((char *)wifi_config.sta.password, pass, sizeof(wifi_config.sta.password) - 1);
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    /* AP 配网期间保持 APSTA, 避免杀掉热点 */
+    ESP_ERROR_CHECK(esp_wifi_set_mode(s_ap_active ? WIFI_MODE_APSTA : WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_LOGI(TAG, "connecting to SSID: %s", ssid);
 }
@@ -83,6 +92,7 @@ void wifi_init(void)
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     esp_netif_create_default_wifi_sta();
+    s_ap_netif = esp_netif_create_default_wifi_ap();   /* 配网回退用, 平时不启用 */
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
@@ -124,4 +134,74 @@ void wifi_set_callbacks(wifi_callback_t on_connected, wifi_callback_t on_disconn
 {
     s_on_connected = on_connected;
     s_on_disconnected = on_disconnected;
+}
+
+/* ---------------- SoftAP 配网回退 ---------------- */
+
+void wifi_ap_fallback_start(void)
+{
+    if (s_ap_active) {
+        return;
+    }
+    if (wifi_is_connected()) {
+        return;   /* 已连上 STA, 无需热点 */
+    }
+
+    /* 热点名带 MAC 尾字节, 多设备同场不撞名 */
+    uint8_t mac[6] = {0};
+    esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
+    snprintf(s_ap_ssid, sizeof(s_ap_ssid), "SmartKnob-%02X%02X", mac[4], mac[5]);
+
+    wifi_config_t ap_config = {
+        .ap = {
+            .channel = 6,
+            .max_connection = 4,
+            .authmode = WIFI_AUTH_OPEN,
+        },
+    };
+    strncpy((char *)ap_config.ap.ssid, s_ap_ssid, sizeof(ap_config.ap.ssid) - 1);
+    ap_config.ap.ssid_len = strlen(s_ap_ssid);
+
+    if (strlen(CONFIG_WIFI_AP_PASSWORD) > 0) {
+        strncpy((char *)ap_config.ap.password, CONFIG_WIFI_AP_PASSWORD, sizeof(ap_config.ap.password) - 1);
+        ap_config.ap.authmode = WIFI_AUTH_WPA2_PSK;
+    }
+
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
+    s_ap_active = true;
+    ESP_LOGW(TAG, "AP fallback ON: ssid=%s ip=192.168.4.1 (web config)", s_ap_ssid);
+    /* AP 网段下立即提供管理页(httpd 绑定 0.0.0.0, STA 连上后同样可访问) */
+    webcfg_start();
+    /* APSTA 模式切换会重新触发 STA_START -> event_handler 继续 esp_wifi_connect() */
+}
+
+void wifi_ap_fallback_stop(void)
+{
+    if (!s_ap_active) {
+        return;
+    }
+    s_ap_active = false;
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_LOGI(TAG, "AP fallback OFF (STA connected)");
+}
+
+bool wifi_ap_is_active(void)
+{
+    return s_ap_active;
+}
+
+void wifi_ap_get_ip_str(char *buf, int buflen)
+{
+    esp_netif_ip_info_t info = {0};
+    if (s_ap_netif && esp_netif_get_ip_info(s_ap_netif, &info) == ESP_OK && info.ip.addr != 0) {
+        snprintf(buf, buflen, IPSTR, IP2STR(&info.ip));
+    } else {
+        snprintf(buf, buflen, "192.168.4.1");
+    }
+}
+
+const char *wifi_ap_get_ssid(void)
+{
+    return s_ap_ssid;
 }

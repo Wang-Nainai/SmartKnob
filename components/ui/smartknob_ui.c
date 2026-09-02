@@ -36,6 +36,7 @@ extern const page_ops_t pg_env_ops;
 extern const page_ops_t pg_setting_ops;
 extern const page_ops_t pg_sysinfo_ops;
 extern const page_ops_t pg_factory_ops;
+extern const page_ops_t pg_apcfg_ops;
 
 static const page_ops_t *const page_ops_table[PAGE_COUNT] = {
     [PAGE_STARTUP]    = &pg_startup_ops,
@@ -47,6 +48,7 @@ static const page_ops_t *const page_ops_table[PAGE_COUNT] = {
     [PAGE_SETTING]    = &pg_setting_ops,
     [PAGE_SYSINFO]    = &pg_sysinfo_ops,
     [PAGE_FACTORY]    = &pg_factory_ops,
+    [PAGE_APCFG]      = &pg_apcfg_ops,
 };
 
 /* ---------------- page stack ---------------- */
@@ -366,9 +368,33 @@ static void input_timer_cb(lv_timer_t *t)
 
 /* ---------------- periodic refresh ---------------- */
 
+/* SoftAP 配网页状态(仅 LVGL 任务访问) */
+static bool s_apcfg_dismissed = false;
+
+void ui_apcfg_set_dismissed(void)
+{
+    s_apcfg_dismissed = true;
+}
+
+static void apcfg_poll(void)
+{
+    bool ap = wifi_ap_is_active();
+    page_t *top = pm_top();
+    bool on_ap_page = (top && top->ops == &pg_apcfg_ops);
+
+    if (ap && !on_ap_page) {
+        if (!s_apcfg_dismissed) {
+            pm_push(PAGE_APCFG);   /* 热点开启: 自动弹配网页 */
+        }
+    } else if (!ap && on_ap_page) {
+        pm_pop();                  /* 配网成功/热点关闭: 自动退出 */
+    }
+}
+
 static void refresh_timer_cb(lv_timer_t *t)
 {
     status_bar_update();
+    apcfg_poll();
     page_t *top = pm_top();
     if (top && top->ops->on_tick) {
         top->ops->on_tick(top);
