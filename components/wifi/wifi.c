@@ -1,5 +1,5 @@
 #include "wifi.h"
-#include "webcfg.h"
+#include "app_state.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "esp_wifi.h"
@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "nvs_flash.h"
+#include "nvs.h"
 #include "lwip/inet.h"
 #include <string.h>
 #include <stdio.h>
@@ -21,8 +22,8 @@ static wifi_callback_t s_on_connected = NULL;
 static wifi_callback_t s_on_disconnected = NULL;
 static esp_ip4_addr_t s_ip_addr;
 
-/* SoftAP 配网回退状态 */
-static bool s_ap_active = false;
+/* SoftAP 配网回退状态 (跨任务读: 事件任务写/LVGL 读, 用 volatile) */
+static volatile bool s_ap_active = false;
 static char s_ap_ssid[33] = "SmartKnob";
 static esp_netif_t *s_ap_netif = NULL;
 
@@ -35,6 +36,7 @@ static void event_handler(void *arg, esp_event_base_t base, int32_t id, void *da
         if (s_retry_num == 1 || s_retry_num % 5 == 0) {
             ESP_LOGI(TAG, "STA reconnect attempt %d", s_retry_num);
         }
+        app_state_set_wifi(false);
         esp_wifi_connect();   /* 无限重连: 断网自愈, AP 配网页依赖持续重试 */
         if (s_on_disconnected) s_on_disconnected();
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
@@ -42,6 +44,7 @@ static void event_handler(void *arg, esp_event_base_t base, int32_t id, void *da
         s_ip_addr = event->ip_info.ip;
         ESP_LOGI(TAG, "connected, IP: " IPSTR, IP2STR(&s_ip_addr));
         s_retry_num = 0;
+        app_state_set_wifi(true);
         xEventGroupSetBits(s_wifi_event, WIFI_CONNECTED_BIT);
         if (s_ap_active) {
             wifi_ap_fallback_stop();   /* 配网成功: 自动关闭热点 */
@@ -59,6 +62,29 @@ void wifi_get_ip_str(char *buf, size_t len)
     }
 }
 
+/* 本地读取网页配置(NVS "webcfg" 命名空间), 避免 wifi->webcfg 循环依赖 */
+static void wifi_read_cfg(char *ssid, size_t ssid_len, char *pass, size_t pass_len)
+{
+    ssid[0] = 0;
+    pass[0] = 0;
+    nvs_handle_t h;
+    if (nvs_open("webcfg", NVS_READONLY, &h) == ESP_OK) {
+        size_t sz = ssid_len;
+        nvs_get_str(h, "wifi_ssid", ssid, &sz);
+        sz = pass_len;
+        nvs_get_str(h, "wifi_pass", pass, &sz);
+        nvs_close(h);
+    }
+    if (!ssid[0]) {
+        strncpy(ssid, CONFIG_ESP_WIFI_SSID, ssid_len - 1);
+        ssid[ssid_len - 1] = 0;
+    }
+    if (!pass[0]) {
+        strncpy(pass, CONFIG_ESP_WIFI_PASS, pass_len - 1);
+        pass[pass_len - 1] = 0;
+    }
+}
+
 static void wifi_apply_config(void)
 {
     wifi_config_t wifi_config = {
@@ -68,8 +94,7 @@ static void wifi_apply_config(void)
     };
     char ssid[33] = {0};
     char pass[65] = {0};
-    webcfg_get_str("wifi_ssid", ssid, sizeof(ssid), CONFIG_ESP_WIFI_SSID);
-    webcfg_get_str("wifi_pass", pass, sizeof(pass), CONFIG_ESP_WIFI_PASS);
+    wifi_read_cfg(ssid, sizeof(ssid), pass, sizeof(pass));
     strncpy((char *)wifi_config.sta.ssid, ssid, sizeof(wifi_config.sta.ssid) - 1);
     strncpy((char *)wifi_config.sta.password, pass, sizeof(wifi_config.sta.password) - 1);
     /* AP 配网期间保持 APSTA, 避免杀掉热点 */
@@ -167,12 +192,19 @@ void wifi_ap_fallback_start(void)
         ap_config.ap.authmode = WIFI_AUTH_WPA2_PSK;
     }
 
+    /* 先置标志再动硬件: GOT_IP 事件若在配置期间到达, stop 路径能正确执行 */
+    app_state_set_ap(true, s_ap_ssid, "192.168.4.1");
+    s_ap_active = true;
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
-    s_ap_active = true;
     ESP_LOGW(TAG, "AP fallback ON: ssid=%s ip=192.168.4.1 (web config)", s_ap_ssid);
-    /* AP 网段下立即提供管理页(httpd 绑定 0.0.0.0, STA 连上后同样可访问) */
-    webcfg_start();
+    /* webcfg HTTP 服务由 main 在调用本函数后启动(httpd 绑定 0.0.0.0,
+     * AP/STA 网段均可达); 此处不再直接调用以避免 wifi->webcfg 循环依赖 */
+    /* 双保险: 配置期间 STA 恰好连上则立即收掉热点 */
+    if (wifi_is_connected()) {
+        wifi_ap_fallback_stop();
+        return;
+    }
     /* APSTA 模式切换会重新触发 STA_START -> event_handler 继续 esp_wifi_connect() */
 }
 
@@ -182,6 +214,7 @@ void wifi_ap_fallback_stop(void)
         return;
     }
     s_ap_active = false;
+    app_state_set_ap(false, NULL, NULL);
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_LOGI(TAG, "AP fallback OFF (STA connected)");
 }

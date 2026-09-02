@@ -1,6 +1,7 @@
 #include "led.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "driver/rmt_tx.h"
 #include "esp_log.h"
 #include "led_strip_encoder.h"
@@ -12,6 +13,9 @@ static const char *TAG = "led";
 
 static rmt_channel_handle_t led_chan = NULL;
 static rmt_encoder_handle_t led_encoder = NULL;
+/* WiFi 事件任务 / MQTT 任务 / LVGL 任务(工厂页) / httpd 任务(web 控制)
+ * 都可能并发调用, RMT 通道发送必须串行化 */
+static SemaphoreHandle_t s_led_mux = NULL;
 
 void led_init(void)
 {
@@ -31,11 +35,17 @@ void led_init(void)
 
     ESP_ERROR_CHECK(rmt_enable(led_chan));
 
+    s_led_mux = xSemaphoreCreateMutex();
+
     ESP_LOGI(TAG, "initialized on GPIO %d", LED_GPIO);
 }
 
 void led_set_color(uint8_t r, uint8_t g, uint8_t b)
 {
+    if (!s_led_mux) {
+        return;   /* 未初始化 */
+    }
+    xSemaphoreTake(s_led_mux, portMAX_DELAY);
     uint8_t pixels[3];
     pixels[0] = g;
     pixels[1] = b;
@@ -44,8 +54,10 @@ void led_set_color(uint8_t r, uint8_t g, uint8_t b)
     rmt_transmit_config_t tx_config = {
         .loop_count = 0,
     };
-    ESP_ERROR_CHECK(rmt_transmit(led_chan, led_encoder, pixels, sizeof(pixels), &tx_config));
-    ESP_ERROR_CHECK(rmt_tx_wait_all_done(led_chan, portMAX_DELAY));
+    if (rmt_transmit(led_chan, led_encoder, pixels, sizeof(pixels), &tx_config) == ESP_OK) {
+        rmt_tx_wait_all_done(led_chan, portMAX_DELAY);
+    }
+    xSemaphoreGive(s_led_mux);
 }
 
 void led_set_hsv(uint16_t h, uint8_t s, uint8_t v)

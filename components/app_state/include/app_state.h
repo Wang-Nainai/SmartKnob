@@ -26,6 +26,14 @@ void app_state_set_env(uint16_t co2_ppm, float temperature_c, float humidity_pct
 /* 任意任务读取环境数据快照 */
 void app_state_get_env(app_env_t *env);
 
+/* ---- WiFi / AP 状态快照(wifi 任务写入, 其它任务只读) ---- */
+void app_state_set_wifi(bool connected);
+bool app_state_get_wifi(void);
+
+/* active 变为 true 前必须先写好 ssid/ip (写后置位顺序保证) */
+void app_state_set_ap(bool active, const char *ssid, const char *ip);
+bool app_state_get_ap(char *ssid, size_t ssid_len, char *ip, size_t ip_len);
+
 #ifdef __cplusplus
 }
 #endif

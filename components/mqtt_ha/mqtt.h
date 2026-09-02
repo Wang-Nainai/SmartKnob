@@ -13,3 +13,6 @@ void mqtt_ha_publish(uint16_t co2_ppm, float temp_c, float humidity_pct);
 bool mqtt_ha_is_connected(void);
 /* Publish a HASS control command (X-Knob style): <topic>/HOME/<device> with payload cmd */
 void mqtt_ha_publish_cmd(const char *device, const char *cmd);
+/* HA 设备自动化动作: dev_idx 0-3, cmd "ON"/"OFF"/"LEFT"/"RIGHT"
+ * 发布 smartknob/action -> HA 触发器(自动发现)可视化绑定任意实体 */
+void mqtt_ha_publish_action(int dev_idx, const char *cmd);

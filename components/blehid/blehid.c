@@ -296,6 +296,13 @@ bool blehid_is_connected(void)
     return s_connected;
 }
 
+void blehid_disconnect(void)
+{
+    if (s_connected && s_conn_handle != BLE_HS_CONN_HANDLE_NONE) {
+        ble_gap_terminate(s_conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+    }
+}
+
 void blehid_consumer_send(uint16_t usage)
 {
     if (!s_connected) {

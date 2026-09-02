@@ -101,6 +101,7 @@ static void hass_tap_cb(lv_event_t *e)
         return;
     }
     mqtt_ha_publish_cmd(device_names[d->focus], "ON/OFF");
+    mqtt_ha_publish_action(d->focus, "ON");
     lv_label_set_text(d->label_last, "ON/OFF");
     pm_shake();
 }
@@ -261,6 +262,7 @@ static void pg_hass_on_rotate(page_t *p, int32_t steps)
     hass_data_t *d = p->data;
     if (d->in_control) {
         mqtt_ha_publish_cmd(device_names[d->focus], steps > 0 ? "RIGHT" : "LEFT");
+    mqtt_ha_publish_action(d->focus, steps > 0 ? "RIGHT" : "LEFT");
         lv_label_set_text(d->label_last, steps > 0 ? "RIGHT" : "LEFT");
         pm_shake();
     } else {

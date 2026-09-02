@@ -140,6 +140,7 @@ void app_main(void)
         ESP_LOGW(TAG, "WiFi not connected in %ds, starting SoftAP provisioning",
                  CONFIG_WIFI_AP_FALLBACK_TIMEOUT_SEC);
         wifi_ap_fallback_start();
+        webcfg_start();   /* 热点网段立即提供管理页(httpd 绑定 0.0.0.0) */
     }
 #endif
     if (wifi_ok) {

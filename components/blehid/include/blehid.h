@@ -16,6 +16,8 @@ extern "C" {
 
 esp_err_t blehid_init(void);
 bool blehid_is_connected(void);
+/* 主动断开当前 HID 连接并重新开始广播 */
+void blehid_disconnect(void);
 
 /* 消费控制: 发送一次按下+释放 (Consumer usage code, 如 0xE9=音量+) */
 void blehid_consumer_send(uint16_t usage);

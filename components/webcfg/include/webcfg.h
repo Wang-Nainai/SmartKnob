@@ -13,6 +13,8 @@ extern "C" {
 void webcfg_get_str(const char *key, char *buf, size_t len, const char *fallback);
 void webcfg_set_str(const char *key, const char *value);
 void webcfg_erase_all(void);
+/* i32 配置存取(与 UI 共用 "webcfg" 命名空间, 如亮度/熄屏) */
+void webcfg_set_i32(const char *key, int32_t value);
 
 /* ---- HTTP server (config page + OTA). Call after WiFi is connected. ---- */
 void webcfg_start(void);
