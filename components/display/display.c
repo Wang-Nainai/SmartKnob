@@ -486,15 +486,25 @@ esp_err_t display_init(void)
     ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)LCD_HOST, &tp_io_config, &tp_io_handle));
     s_tp.io = tp_io_handle;
 
-    /* 开机自检: 读一次原始值, 用于排查接线
-     * 正常: 未按下时 z1≈0 z2≈4095; 若恒为 0 或 4095 请检查
-     * T_CLK/T_DIN/T_DO 是否已接到 SCK/MOSI/MISO(此类红板触摸与 LCD 是独立引脚) */
+    /* 开机自检: 读一次原始值并自动判读
+     * 正常待机: z1≈0, z2≈4095 (未按下)
+     * 全 0:     芯片未响应 -> T_CLK/T_DIN/T_DO/T_CS 接线问题,
+     *           或模块根本没有触摸 IC(GMT240 部分版本 T_* 引脚为 NC) */
     vTaskDelay(pdMS_TO_TICKS(100));
     uint16_t z1 = tp_read_reg(TP_CMD_Z1);
     uint16_t z2 = tp_read_reg(TP_CMD_Z2);
     uint16_t rx = tp_read_reg(TP_CMD_X);
     uint16_t ry = tp_read_reg(TP_CMD_Y);
-    ESP_LOGI(TAG, "XPT2046 selftest: z1=%u z2=%u x=%u y=%u (untouched expect z1~0,z2~4095)", z1, z2, rx, ry);
+    if (z1 == 0 && z2 == 0 && rx == 0 && ry == 0) {
+        ESP_LOGW(TAG, "XPT2046 selftest: z1=0 z2=0 x=0 y=0 -> 芯片未响应!");
+        ESP_LOGW(TAG, "  检查接线: T_CLK->GPIO12 T_DIN->GPIO11 T_DO->GPIO13 T_CS->GPIO14");
+        ESP_LOGW(TAG, "  或确认模块背面是否有 2046 触摸芯片(无触摸版本 T_* 引脚为 NC)");
+    } else if (z2 >= 4000 && z1 <= 50) {
+        ESP_LOGI(TAG, "XPT2046 selftest: z1=%u z2=%u x=%u y=%u (正常待机, 触摸后进工厂测试看实时值)",
+                 z1, z2, rx, ry);
+    } else {
+        ESP_LOGI(TAG, "XPT2046 selftest: z1=%u z2=%u x=%u y=%u (有信号, 可能正被触摸)", z1, z2, rx, ry);
+    }
 
     lv_indev_t *indev = lv_indev_create();
     lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
