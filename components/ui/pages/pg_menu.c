@@ -7,16 +7,16 @@ LV_FONT_DECLARE(lv_font_msyh_16);
 
 /* ============================================================
  * X-Knob 风格主菜单
- * - 6 行全部放下(60px/行), 容器不可滚动 —— 滑动不再触发滚动/误点
+ * - 全屏纵向大列表(行高 100px), 触摸可上下滑动浏览(原模式),
+ *   旋转/聚焦变化时自动滚动跟随焦点
  * - 左侧图标列: 聚焦 220→70 显式宽度动画(180ms 缓出),
  *   旧行展开 + 新行收窄同时进行, 右侧 2px 蓝紫边
  * - 右侧灰色多行功能描述(仅聚焦行)
  * - 旋转 = 移动焦点, 点击 = 进入(滑动>20px 不算点击)
  * ============================================================ */
 
-#define ITEM_H        60
-#define GAP           2
-#define PAD_VER       10
+#define ITEM_H        100
+#define ITEM_PAD      ((320 - ITEM_H) / 2)
 #define ICON_W_OPEN   220   /* 未聚焦: 图标列占满 */
 #define ICON_W_FOCUS  70    /* 聚焦: 收窄, 露出描述 + 右侧主题边 */
 #define ANIM_MS       180
@@ -93,6 +93,8 @@ static void menu_set_focus(menu_data_t *d, int idx)
             lv_obj_add_flag(d->infos[i], LV_OBJ_FLAG_HIDDEN);
         }
     }
+    /* 滚动跟随焦点: 确保聚焦行完整可见 */
+    lv_obj_scroll_to_view(d->rows[idx], LV_ANIM_ON);
 }
 
 /* 点击列表项 → 进入 (滑动超过阈值不算点击, 防误触发) */
@@ -127,12 +129,10 @@ static void pg_menu_create(page_t *p)
     d->focus = 0;
     p->title = "SmartKnob";
 
-    /* 整页不可滚动: 6 行全部放下, 滑动手势不再滚动菜单 */
-    lv_obj_clear_flag(p->root, LV_OBJ_FLAG_SCROLLABLE);
+    /* 触摸可上下滑动浏览(原模式); 旋转时滚动跟随焦点 */
     lv_obj_set_flex_flow(p->root, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(p->root, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_ver(p->root, PAD_VER, 0);
-    lv_obj_set_style_pad_row(p->root, GAP, 0);
+    lv_obj_set_style_pad_ver(p->root, ITEM_PAD, 0);
 
     for (int i = 0; i < (int)MENU_COUNT; i++) {
         /* 行容器 */
@@ -210,8 +210,10 @@ static void pg_menu_on_back(page_t *p)
 
 static void pg_menu_on_resume(page_t *p)
 {
-    /* 从子页返回: 恢复菜单浏览手感(子页可能改过电机模式) */
+    /* 从子页返回: 恢复菜单浏览手感 + 滚动回焦点行 */
+    menu_data_t *d = p->data;
     motor_set_mode(MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
+    menu_set_focus(d, d->focus);
 }
 
 static void pg_menu_on_tick(page_t *p)
