@@ -42,16 +42,18 @@ static const uint8_t s_report_map[] = {
     0x75, 0x08, 0x95, 0x03,         /*     Size 8, Count 3 */
     0x81, 0x06,                     /*     Input (Data, Var, Rel) */
     0xC0, 0xC0,                     /*   End Collection x2 */
-    /* Consumer Control */
+    /* Consumer Control
+     * 8-bit usage 数组槽(Count 2): 16-bit 槽(LogicalMax 1023)的写法
+     * 实测 Windows/Android 的 HID 解析器都不映射(绑定成功但输入全无);
+     * 8-bit 数组(UsageMax 255)是 ESP32-BLE-Keyboard 等广泛验证的形式,
+     * 报文 [ID, usage, 0], 所有音量/媒体码 < 255 */
     0x05, 0x0C,                     /* Usage Page (Consumer) */
     0x09, 0x01,                     /* Usage (Consumer Control) */
     0xA1, 0x01,                     /* Collection (Application) */
     0x85, 0x01,                     /*   Report ID (1) */
-    0x15, 0x00,                     /*   Logical Min 0 */
-    0x26, 0xFF, 0x03,               /*   Logical Max 1023 */
-    0x19, 0x00,                     /*   Usage Min 0 */
-    0x2A, 0xFF, 0x03,               /*   Usage Max 1023 */
-    0x75, 0x10, 0x95, 0x01,         /*   Size 16, Count 1 */
+    0x19, 0x00, 0x2A, 0xFF, 0x00,   /*   Usage Min 0, Max 255 */
+    0x15, 0x00, 0x26, 0xFF, 0x00,   /*   Logical Min 0, Max 255 */
+    0x75, 0x08, 0x95, 0x02,         /*   Size 8, Count 2 */
     0x81, 0x00,                     /*   Input (Data, Array, Abs) */
     0xC0,
 };
