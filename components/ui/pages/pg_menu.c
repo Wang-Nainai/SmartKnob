@@ -162,9 +162,11 @@ static void pg_menu_on_rotate(page_t *p, int32_t steps)
 {
     menu_data_t *d = p->data;
     int n = (int)MENU_COUNT;
-    d->focus += steps;
-    if (d->focus < 0) d->focus = 0;
-    if (d->focus > n - 1) d->focus = n - 1;
+    /* 无级循环: 1-2-3-4-5-1-2-3 连续旋转 */
+    d->focus = (d->focus + steps) % n;
+    if (d->focus < 0) {
+        d->focus += n;
+    }
     menu_set_focus(d, d->focus);
 }
 

@@ -28,9 +28,9 @@ typedef struct {
     int32_t brightness;
     int32_t timeout_min;
     lv_obj_t *list;         /* 设置列表滚动容器 */
-    lv_obj_t *rows[2];
-    lv_obj_t *icons[2];
-    lv_obj_t *val_labels[2];
+    lv_obj_t *rows[3];
+    lv_obj_t *icons[3];
+    lv_obj_t *val_labels[3];
     lv_obj_t *edit_scr;
     lv_obj_t *scale;
     lv_obj_t *needle;
@@ -41,6 +41,7 @@ typedef struct {
 
 #define SET_BRIGHTNESS 0
 #define SET_TIMEOUT    1
+#define SET_SYSMON     2
 
 static void setting_refresh_rows(setting_data_t *d)
 {
@@ -50,7 +51,7 @@ static void setting_refresh_rows(setting_data_t *d)
     snprintf(buf, sizeof(buf), "%ld \xE5\x88\x86\xE9\x92\x9F", (long)d->timeout_min);
     lv_label_set_text(d->val_labels[SET_TIMEOUT], buf);
 
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 3; i++) {
         if (i == d->focus) {
             lv_obj_add_state(d->icons[i], LV_STATE_FOCUSED);
         } else {
@@ -103,7 +104,13 @@ static void setting_row_cb(lv_event_t *e)
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
     if (d->edit_item < 0) {
         d->focus = idx;
-        setting_show_edit(d, idx);
+        setting_refresh_rows(d);
+        if (idx == SET_SYSMON) {
+            pm_push(PAGE_SYSMON);
+            pm_shake();
+        } else {
+            setting_show_edit(d, idx);
+        }
     }
 }
 
@@ -309,9 +316,10 @@ static void pg_setting_on_rotate(page_t *p, int32_t steps)
 {
     setting_data_t *d = p->data;
     if (d->edit_item < 0) {
-        d->focus += steps;
-        if (d->focus < 0) d->focus = 0;
-        if (d->focus > 1) d->focus = 1;
+        d->focus = (d->focus + steps) % 3;
+        if (d->focus < 0) {
+            d->focus += 3;
+        }
         setting_refresh_rows(d);
     }
     /* 编辑模式: 值由电机档位控制, timer 读取 */

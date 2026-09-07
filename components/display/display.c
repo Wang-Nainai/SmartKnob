@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <math.h>
 #include <sys/lock.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -40,7 +41,7 @@ static const char *TAG = "display";
 #define LVGL_TASK_MAX_DELAY_MS 500
 #define LVGL_TASK_MIN_DELAY_MS 5
 #define LVGL_TASK_STACK_SIZE   (10 * 1024)
-#define LVGL_TASK_PRIORITY     2
+#define LVGL_TASK_PRIORITY     3   /* 高于后台任务, 动画更顺滑 */
 #define LVGL_TASK_CORE         0   /* motor 独占 core1, LVGL 固定 core0 */
 
 static _lock_t lvgl_api_lock;
@@ -168,6 +169,7 @@ typedef struct {
 
 static xpt2046_state_t s_tp = { .io = NULL };
 static volatile touch_gesture_t s_gesture = TOUCH_GEST_NONE;   /* 滑动手势锁存(UI 任务消费) */
+static float s_press_base = -1.0f;   /* 静息压力自适应基线 */
 
 static uint16_t tp_read_reg(uint8_t cmd)
 {
@@ -231,8 +233,30 @@ static void tp_poll(void)
         return;
     }
 
-    if (pressure < CONFIG_TOUCH_Z_THRESHOLD) {
+    /* 自适应基线压力检测: 该面板静息 z2 会漂移(实测 3720~4095),
+     * 固定阈值会导致轻点识别不到。跟踪静息压力,
+     * 压力 > 基线+120(且不低于出厂阈值) 判为触摸, 带迟滞防抖 */
+    if (s_press_base < 0) {
+        s_press_base = (float)pressure;   /* 首次采样建立基线 */
+    }
+    float enter = (float)CONFIG_TOUCH_Z_THRESHOLD;
+    if (s_press_base + 120 > enter) {
+        enter = s_press_base + 120;
+    }
+    float exit = s_press_base + 60;
+
+    if (!s_tp.touched) {
+        if (pressure > enter) {
+            s_tp.touched = true;
+        } else {
+            s_press_base += ((float)pressure - s_press_base) * 0.05f;   /* 跟随静息漂移 */
+        }
+    } else if (pressure < exit) {
         s_tp.touched = false;
+        s_press_base += ((float)pressure - s_press_base) * 0.05f;
+    }
+
+    if (!s_tp.touched) {
         s_tp.raw_x = 0;
         s_tp.raw_y = 0;
         return;

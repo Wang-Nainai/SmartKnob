@@ -274,9 +274,10 @@ static void pg_factory_on_rotate(page_t *p, int32_t steps)
     if (d->in_touch_test) {
         return;
     }
-    d->focus += steps;
-    if (d->focus < 0) d->focus = 0;
-    if (d->focus > FACTORY_ITEMS - 1) d->focus = FACTORY_ITEMS - 1;
+    d->focus = (d->focus + steps) % FACTORY_ITEMS;
+    if (d->focus < 0) {
+        d->focus += FACTORY_ITEMS;
+    }
     factory_refresh(d);
     factory_update_status(d);
 }

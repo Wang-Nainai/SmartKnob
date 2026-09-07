@@ -37,6 +37,7 @@ extern const page_ops_t pg_setting_ops;
 extern const page_ops_t pg_sysinfo_ops;
 extern const page_ops_t pg_factory_ops;
 extern const page_ops_t pg_apcfg_ops;
+extern const page_ops_t pg_sysmon_ops;
 
 static const page_ops_t *const page_ops_table[PAGE_COUNT] = {
     [PAGE_STARTUP]    = &pg_startup_ops,
@@ -49,6 +50,7 @@ static const page_ops_t *const page_ops_table[PAGE_COUNT] = {
     [PAGE_SYSINFO]    = &pg_sysinfo_ops,
     [PAGE_FACTORY]    = &pg_factory_ops,
     [PAGE_APCFG]      = &pg_apcfg_ops,
+    [PAGE_SYSMON]     = &pg_sysmon_ops,
 };
 
 /* ---------------- page stack ---------------- */

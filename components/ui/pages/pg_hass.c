@@ -273,9 +273,10 @@ static void pg_hass_on_rotate(page_t *p, int32_t steps)
         lv_label_set_text(d->label_last, steps > 0 ? "RIGHT" : "LEFT");
         pm_shake();
     } else {
-        d->focus += steps;
-        if (d->focus < 0) d->focus = 0;
-        if (d->focus > HASS_DEVICE_NUM - 1) d->focus = HASS_DEVICE_NUM - 1;
+        d->focus = (d->focus + steps) % HASS_DEVICE_NUM;
+        if (d->focus < 0) {
+            d->focus += HASS_DEVICE_NUM;
+        }
         hass_set_focus(d, d->focus);
     }
 }

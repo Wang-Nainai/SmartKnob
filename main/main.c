@@ -17,6 +17,7 @@
 #include "input.h"
 #include "app_state.h"
 #include "blehid.h"
+#include "sysmon.h"
 
 static const char *TAG = "SmartKnob";
 
@@ -97,6 +98,7 @@ void app_main(void)
     }
 
     app_state_init();
+    sysmon_init();   /* 系统监控采样任务(挂起, 页面开启才工作) */
     led_init();
     display_init();
 
