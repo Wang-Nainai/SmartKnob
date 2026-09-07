@@ -237,11 +237,18 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_ENC_CHANGE:
         ESP_LOGI(TAG, "ENC_CHANGE: status=%d", event->enc_change.status);
         return 0;
-    case BLE_GAP_EVENT_SUBSCRIBE:
-        ESP_LOGI(TAG, "SUBSCRIBE: handle=%d cur=%d prev=%d reason=%d",
-                 event->subscribe.attr_handle, event->subscribe.cur_notify,
+    case BLE_GAP_EVENT_SUBSCRIBE: {
+        const char *what = "OTHER";
+        if (event->subscribe.attr_handle == h_consumer_report + 1) {
+            what = "CONSUMER_CCCD";
+        } else if (event->subscribe.attr_handle == h_mouse_report + 1) {
+            what = "MOUSE_CCCD";
+        }
+        ESP_LOGI(TAG, "SUBSCRIBE: %s handle=%d cur=%d prev=%d reason=%d",
+                 what, event->subscribe.attr_handle, event->subscribe.cur_notify,
                  event->subscribe.prev_notify, event->subscribe.reason);
         return 0;
+    }
     case BLE_GAP_EVENT_MTU:
         ESP_LOGI(TAG, "MTU: %d", event->mtu.value);
         return 0;
@@ -306,6 +313,10 @@ static void on_sync(void)
         return;
     }
     ble_hs_id_infer_auto(0, &s_own_addr_type);
+    /* 句柄注册号: 用于核对 notify/SUBSCRIBE 日志里 att_handle 的归属 */
+    ESP_LOGI(TAG, "report handles: consumer=%u (cccd=%u) mouse=%u (cccd=%u)",
+             h_consumer_report, h_consumer_report + 1,
+             h_mouse_report, h_mouse_report + 1);
     adv_start();
     ESP_LOGI(TAG, "BLE HID ready, pairing name: %s", HID_DEV_NAME);
 }

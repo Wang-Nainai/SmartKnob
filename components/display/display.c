@@ -46,7 +46,8 @@ static const char *TAG = "display";
 #define LVGL_TICK_PERIOD_MS    2
 #define LVGL_TASK_MAX_DELAY_MS 500
 #define LVGL_TASK_MIN_DELAY_MS 5
-#define LVGL_TASK_STACK_SIZE   (10 * 1024)
+#define LVGL_TASK_STACK_SIZE   (6 * 1024)   /* 10->6: 栈是内部内存, BLE/WiFi 挤兑严重;
+                                             * LVGL 9 SW 渲染 6KB 足够, 再省 4KB 给 BLE/WiFi */
 #define LVGL_TASK_PRIORITY     8   /* 高于 mqtt/httpd 等应用任务, 低于 WiFi/BLE 内部任务, 动画少被打断 */
 #define LVGL_TASK_CORE         0   /* motor 独占 core1, LVGL 固定 core0 */
 
