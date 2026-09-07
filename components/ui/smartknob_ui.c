@@ -184,12 +184,13 @@ void pm_push(page_id_t id)
     }
     pm_stack[pm_stack_depth++] = p;
 
-    /* 视差转场: 新页自右滑入, 旧页向左滑动 1/4 屏宽作纵深 */
+    /* 视差转场: 新页自右滑入, 旧页向左滑动 1/4 屏宽作纵深
+     * (240ms: 更干脆, 全程约 15 帧 60fps, 更不易察觉丢帧) */
     lv_anim_t a;
     lv_anim_init(&a);
     lv_anim_set_var(&a, p->root);
     lv_anim_set_values(&a, 240, 0);
-    lv_anim_set_time(&a, 320);
+    lv_anim_set_time(&a, 240);
     lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
     lv_anim_set_exec_cb(&a, anim_x_cb);
     lv_anim_start(&a);
@@ -198,7 +199,7 @@ void pm_push(page_id_t id)
     lv_anim_init(&a2);
     lv_anim_set_var(&a2, p->root);
     lv_anim_set_values(&a2, 0, LV_OPA_COVER);
-    lv_anim_set_time(&a2, 320);
+    lv_anim_set_time(&a2, 240);
     lv_anim_set_path_cb(&a2, lv_anim_path_ease_out);
     lv_anim_set_exec_cb(&a2, anim_opa_cb);
     lv_anim_set_ready_cb(&a2, pm_anim_done);
@@ -209,7 +210,7 @@ void pm_push(page_id_t id)
         lv_anim_init(&a3);
         lv_anim_set_var(&a3, old->root);
         lv_anim_set_values(&a3, 0, -60);
-        lv_anim_set_time(&a3, 320);
+        lv_anim_set_time(&a3, 240);
         lv_anim_set_path_cb(&a3, lv_anim_path_ease_out);
         lv_anim_set_exec_cb(&a3, anim_x_cb);
         lv_anim_set_ready_cb(&a3, pm_old_parallax_done);
@@ -248,7 +249,7 @@ void pm_pop(void)
     lv_anim_init(&a);
     lv_anim_set_var(&a, p->root);
     lv_anim_set_values(&a, 0, 240);
-    lv_anim_set_time(&a, 260);
+    lv_anim_set_time(&a, 200);
     lv_anim_set_path_cb(&a, lv_anim_path_ease_in);
     lv_anim_set_exec_cb(&a, anim_x_cb);
     lv_anim_set_user_data(&a, p);
@@ -258,7 +259,7 @@ void pm_pop(void)
     lv_anim_init(&a2);
     lv_anim_set_var(&a2, p->root);
     lv_anim_set_values(&a2, LV_OPA_COVER, 0);
-    lv_anim_set_time(&a2, 260);
+    lv_anim_set_time(&a2, 200);
     lv_anim_set_path_cb(&a2, lv_anim_path_ease_in);
     lv_anim_set_exec_cb(&a2, anim_opa_cb);
     lv_anim_set_ready_cb(&a2, pm_pop_anim_done);
@@ -270,7 +271,7 @@ void pm_pop(void)
         lv_anim_init(&a3);
         lv_anim_set_var(&a3, under->root);
         lv_anim_set_values(&a3, -60, 0);
-        lv_anim_set_time(&a3, 260);
+        lv_anim_set_time(&a3, 200);
         lv_anim_set_path_cb(&a3, lv_anim_path_ease_out);
         lv_anim_set_exec_cb(&a3, anim_x_cb);
         lv_anim_start(&a3);

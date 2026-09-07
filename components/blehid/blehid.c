@@ -75,6 +75,8 @@ static const ble_uuid16_t uuid_chr_proto_mode = BLE_UUID16_INIT(0x2A4E);
 static const ble_uuid16_t uuid_chr_report = BLE_UUID16_INIT(0x2A4D);
 static const ble_uuid16_t uuid_dsc_report_ref = BLE_UUID16_INIT(0x2908);
 static const ble_uuid16_t uuid_chr_battery = BLE_UUID16_INIT(0x2A19);
+static const ble_uuid16_t uuid_svc_dis = BLE_UUID16_INIT(0x180A);
+static const ble_uuid16_t uuid_chr_pnp = BLE_UUID16_INIT(0x2A50);
 
 /* Report Reference 描述符值: {Report ID, 类型(1=Input)} */
 static const uint8_t report_ref_consumer[2] = { 0x01, 0x01 };
@@ -83,6 +85,9 @@ static const uint8_t report_ref_mouse[2]    = { 0x02, 0x01 };
 static const uint8_t hid_info_val[4] = { 0x01, 0x01, 0x00, 0x02 };
 static const uint8_t proto_mode_val = 0x01;   /* Report 协议 */
 static const uint8_t battery_val = 100;
+/* PnP ID: Win/BLE HID 类驱动强制要求, 缺失则配对成功也不创建 HID 设备
+ * {来源=USB-IF, VID=0x303A(Espressif), PID=0x4004, 版本=1.0} */
+static const uint8_t pnp_id_val[7] = { 0x02, 0x3A, 0x30, 0x04, 0x40, 0x00, 0x01 };
 
 static void adv_start(void);
 
@@ -118,6 +123,11 @@ static int report_ref_cb(uint16_t conn, uint16_t attr, struct ble_gatt_access_ct
 {
     const uint8_t *ref = (const uint8_t *)arg;
     return os_mbuf_append(ctxt->om, ref, 2);
+}
+
+static int pnp_id_cb(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    return os_mbuf_append(ctxt->om, pnp_id_val, sizeof(pnp_id_val));
 }
 
 static int battery_cb(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg)
@@ -184,6 +194,16 @@ static const struct ble_gatt_svc_def gatt_svcs[] = {
         .characteristics = (struct ble_gatt_chr_def[]) {
             { .uuid = &uuid_chr_battery.u,
               .access_cb = battery_cb,
+              .flags = BLE_GATT_CHR_F_READ },
+            { 0 },
+        },
+    },
+    {   /* Device Information Service: PnP ID 是 Windows BLE HID 实例化的硬性要求 */
+        .type = BLE_GATT_SVC_TYPE_PRIMARY,
+        .uuid = &uuid_svc_dis.u,
+        .characteristics = (struct ble_gatt_chr_def[]) {
+            { .uuid = &uuid_chr_pnp.u,
+              .access_cb = pnp_id_cb,
               .flags = BLE_GATT_CHR_F_READ },
             { 0 },
         },
@@ -304,7 +324,16 @@ static void notify(uint16_t handle, const uint8_t *data, size_t len)
     if (!om) {
         return;
     }
-    ble_gatts_notify_custom(s_conn_handle, handle, om);
+    int rc = ble_gatts_notify_custom(s_conn_handle, handle, om);
+    if (rc != 0) {
+        /* 限频诊断: rc=3(BLE_HS_ENOTCONN)/6(EBUSY) 等说明链路或订阅状态异常 */
+        static uint32_t last_fail_log = 0;
+        uint32_t now = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+        if (now - last_fail_log > 1000) {
+            last_fail_log = now;
+            ESP_LOGW(TAG, "notify failed handle=%u len=%u rc=%d", handle, (unsigned)len, rc);
+        }
+    }
 }
 
 /* ---------------- 公共 API ---------------- */
