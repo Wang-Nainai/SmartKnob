@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <unistd.h>
+#include <stdlib.h>
 #include <sys/lock.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -166,6 +167,7 @@ typedef struct {
 } xpt2046_state_t;
 
 static xpt2046_state_t s_tp = { .io = NULL };
+static volatile bool s_swipe_back = false;   /* 滑动返回手势锁存(UI 任务消费) */
 
 static uint16_t tp_read_reg(uint8_t cmd)
 {
@@ -301,6 +303,28 @@ static void lvgl_touch_cb(lv_indev_t *indev, lv_indev_data_t *data)
     } else {
         data->state = LV_INDEV_STATE_RELEASED;
     }
+
+    /* ---- 滑动手势检测: 水平滑动 >60px 且明显大于纵向位移 => 返回 ---- */
+    static bool prev_touched = false;
+    static int16_t start_x = 0, start_y = 0;
+    if (s_tp.touched && !prev_touched) {
+        start_x = (int16_t)s_tp.x;
+        start_y = (int16_t)s_tp.y;
+    } else if (!s_tp.touched && prev_touched) {
+        int dx = (int)s_tp.x - start_x;
+        int dy = (int)s_tp.y - start_y;
+        if (abs(dx) > 60 && abs(dx) > 2 * abs(dy)) {
+            s_swipe_back = true;
+        }
+    }
+    prev_touched = s_tp.touched;
+}
+
+bool display_touch_pop_gesture(void)
+{
+    bool g = s_swipe_back;
+    s_swipe_back = false;
+    return g;
 }
 
 static void increase_lvgl_tick(void *arg)

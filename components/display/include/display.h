@@ -12,6 +12,8 @@ void display_lvgl_unlock(void);
 
 /* XPT2046 原始读数(工厂诊断); 返回当前是否触压 */
 bool display_touch_get_raw(uint16_t *z1, uint16_t *z2, uint16_t *raw_x, uint16_t *raw_y);
+/* 取走并清除"滑动返回"手势(水平滑动>60px); 有手势返回 true */
+bool display_touch_pop_gesture(void);
 
 /* Backlight PWM brightness, 0-100 percent (0 = screen off) */
 void display_set_brightness(int percent);
