@@ -101,6 +101,10 @@ static int hid_info_cb(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt
 
 static int report_map_cb(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
+    /* 读取计数: 主机重配对后若从未读取 = 在用缓存的旧解析结果(不改输入行为) */
+    static uint32_t s_map_reads = 0;
+    s_map_reads++;
+    ESP_LOGI(TAG, "report map READ #%u by host", (unsigned)s_map_reads);
     return os_mbuf_append(ctxt->om, s_report_map, sizeof(s_report_map));
 }
 
