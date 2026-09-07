@@ -41,14 +41,19 @@ static void pg_startup_create(page_t *p)
     lv_obj_set_style_text_font(label, &lv_font_montserrat_32, 0);
     lv_obj_set_style_text_color(label, lv_color_hex(XK_COLOR_TEXT), 0);
     lv_label_set_text(label, "SmartKnob");
-    lv_obj_center(label);
+
+    /* 按文字实际宽度定容器, 避免左右裁切; 下划线从 0 展开到该宽度 */
+    lv_obj_update_layout(label);
+    int32_t w = lv_obj_get_width(label) + 8;
+    lv_obj_set_width(cont, w);
+    lv_obj_center(cont);
 
     /* underline expands */
     lv_anim_t a;
     lv_anim_init(&a);
     lv_anim_set_var(&a, cont);
     lv_anim_set_exec_cb(&a, anim_width_cb);
-    lv_anim_set_values(&a, 0, 110);
+    lv_anim_set_values(&a, 0, w);
     lv_anim_set_time(&a, 500);
     lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
     lv_anim_start(&a);

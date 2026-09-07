@@ -470,11 +470,11 @@ void smartknob_ui_init(void)
     status_bar_update();
 
     /* restore persisted settings */
-    int32_t brightness = 80, timeout = 30;
+    int32_t brightness = 100, timeout = 2;
     ui_nvs_load_i32("brightness", &brightness);
     ui_nvs_load_i32("timeout", &timeout);
     display_set_brightness(brightness);
-    display_set_screen_timeout(timeout);
+    display_set_screen_timeout(timeout * 60);
 
     lv_timer_create(refresh_timer_cb, 500, NULL);
     lv_timer_create(input_timer_cb, 20, NULL);

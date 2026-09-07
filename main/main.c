@@ -31,8 +31,9 @@ static void init_sntp(void)
     tzset();
 
     esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
-    esp_sntp_setservername(0, "ntp.aliyun.com");
-    esp_sntp_setservername(1, "cn.pool.ntp.org");
+    esp_sntp_setservername(0, "120.25.115.20");   /* 阿里 NTP 的 IP, 绕过 DNS 便于诊断 */
+    esp_sntp_setservername(1, "ntp.aliyun.com");
+    esp_sntp_setservername(2, "cn.pool.ntp.org");
     esp_sntp_set_time_sync_notification_cb(sntp_sync_cb);
     esp_sntp_set_sync_interval(10 * 60 * 1000);   /* 10 分钟 */
     esp_sntp_init();

@@ -33,10 +33,10 @@ config TOUCH_SWAP_XY
 
 config TOUCH_MIRROR_X
     bool "Mirror touch X axis"
-    default n
+    default y
 
 config TOUCH_MIRROR_Y
     bool "Mirror touch Y axis"
-    default n
+    default y
 
 endmenu
