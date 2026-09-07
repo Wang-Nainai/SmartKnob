@@ -327,7 +327,8 @@ static void st7789_post_init(esp_lcd_panel_io_handle_t io)
 
     esp_lcd_panel_io_tx_param(io, 0x13, NULL, 0);
 
-    esp_lcd_panel_io_tx_param(io, 0x21, NULL, 0);
+    /* 该panel颜色需要 INVOFF(实机验证: INVON 时黑底显示为白、颜色反相) */
+    esp_lcd_panel_io_tx_param(io, 0x20, NULL, 0);
 
     {
         uint8_t data[] = {0x0C, 0x0C, 0x00, 0x33, 0x33};

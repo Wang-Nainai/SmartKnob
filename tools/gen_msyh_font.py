@@ -73,16 +73,22 @@ def render_glyph(font, ch):
     d = ImageDraw.Draw(img)
     d.text((-x0, -y0), ch, font=font, fill=255)
     px = img.load()
-    # 4bpp 打包: 首像素=高半字节, 每行按字节对齐
-    row_bytes = (w + 1) // 2
+    # LVGL FMT_TXT 4bpp: 整个字形是连续的半字节流(首像素=高半字节),
+    # 解码器 i 计数跨行持续, 不按行字节对齐 —— 按行补齐会导致奇数宽度字形花屏
     out = bytearray()
+    acc = 0
+    have_nib = False
     for y in range(h):
-        for bx in range(row_bytes):
-            hi = px[bx * 2, y] if bx * 2 < w else 0
-            lo = px[bx * 2 + 1, y] if bx * 2 + 1 < w else 0
-            hi = (hi * 15 + 127) // 255
-            lo = (lo * 15 + 127) // 255
-            out.append((hi << 4) | lo)
+        for x in range(w):
+            a = (px[x, y] * 15 + 127) // 255
+            if not have_nib:
+                acc = a
+                have_nib = True
+            else:
+                out.append((acc << 4) | a)
+                have_nib = False
+    if have_nib:
+        out.append(acc << 4)
     ofs_y = (font.getmetrics()[0]) - y0 - h   # ascent - bbox_top - box_h
     return max(1, round(adv * 16)), w, h, x0, ofs_y, bytes(out)
 
