@@ -6,6 +6,7 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_mac.h"
+#include "esp_heap_caps.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "lwip/inet.h"
@@ -126,7 +127,19 @@ void wifi_init(void)
     s_ap_netif = esp_netif_create_default_wifi_ap();   /* 配网回退用, 平时不启用 */
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    /* NO_MEM 不 abort(否则启动死循环): 等 1s 重试, 最多 3 次 */
+    esp_err_t werr = ESP_ERR_NO_MEM;
+    for (int i = 0; i < 3 && werr == ESP_ERR_NO_MEM; i++) {
+        werr = esp_wifi_init(&cfg);
+        if (werr == ESP_ERR_NO_MEM) {
+            ESP_LOGE(TAG, "esp_wifi_init NO_MEM (internal free=%u largest=%u), retry %d/3",
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+                     i + 1);
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
+    }
+    ESP_ERROR_CHECK(werr);
 
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL, NULL));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, NULL, NULL));

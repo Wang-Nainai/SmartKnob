@@ -40,7 +40,8 @@ static const char *TAG = "display";
 #define PIN_NUM_LCD_BL     21
 #define PIN_NUM_TOUCH_CS   14
 
-#define LVGL_DRAW_BUF_LINES    60   /* 30->60: 减少整帧冲刷次数 11->6 次(双缓冲共 57.6KB DMA 内存) */
+#define LVGL_DRAW_BUF_LINES    40   /* 60->40: WiFi 驱动初始化需要成块内部 DMA 内存,
+                                     * 缓冲过大会把它挤到 NO_MEM; 40 行仍比最初 30 行省冲刷 */
 #define LVGL_TICK_PERIOD_MS    2
 #define LVGL_TASK_MAX_DELAY_MS 500
 #define LVGL_TASK_MIN_DELAY_MS 5

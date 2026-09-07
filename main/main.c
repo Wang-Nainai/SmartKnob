@@ -134,8 +134,10 @@ void app_main(void)
     webcfg_set_apply_cb(on_webcfg_apply);
 
     led_set_color(0, 0, 255);
-    blehid_init();        /* BLE HID: 电脑控制(S-Dial), 开机可配对 */
+    /* WiFi 先于 BLE 初始化: WiFi 驱动需要成块内部 DMA 内存,
+     * BLE 先起会把内部 RAM 吃掉导致 esp_wifi_init NO_MEM 崩溃(实测) */
     wifi_init();
+    blehid_init();        /* BLE HID: 电脑控制(S-Dial), 开机可配对 */
     init_sntp();
 
     /* httpd 绑定 0.0.0.0, 开机即启动, 不依赖 netif/WiFi 事件任务上下文 */
