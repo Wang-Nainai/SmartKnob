@@ -40,9 +40,9 @@ static const char *TAG = "display";
 #define PIN_NUM_LCD_BL     21
 #define PIN_NUM_TOUCH_CS   14
 
-#define LVGL_DRAW_BUF_LINES    30   /* 40->30: BLE 控制器连接期要内部内存,
-                                     * 缓冲大 -9.6KB 后实测 BLE_INIT Malloc failed;
-                                     * 流畅度主要靠 80MHz 时钟, 缓冲回到安全值 */
+#define LVGL_DRAW_BUF_LINES    20   /* 30->20: BLE 控制器/SoftAP 连接期分配在内部内存
+                                     * 已实测两次 Malloc fail / eb alloc fail,
+                                     * 缓冲是最大的可控占用(再省 9.6KB); 流畅度靠 80MHz 时钟 */
 #define LVGL_TICK_PERIOD_MS    2
 #define LVGL_TASK_MAX_DELAY_MS 500
 #define LVGL_TASK_MIN_DELAY_MS 5

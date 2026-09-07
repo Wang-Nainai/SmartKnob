@@ -220,6 +220,13 @@ void wifi_ap_fallback_start(void)
     }
 
     /* 先置标志再动硬件: GOT_IP 事件若在配置期间到达, stop 路径能正确执行 */
+    /* 内存预检: SoftAP attach 在闭源库内分配失败不会返回错误而是直接 NULL
+     * 解引用崩溃(eb alloc fail -> hostap_attach panic), 只能靠不发起来防 */
+    uint32_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (largest < 24 * 1024) {
+        ESP_LOGE(TAG, "AP start skipped: internal largest=%u too small (avoid blob crash)", largest);
+        return;
+    }
     app_state_set_ap(true, s_ap_ssid, "192.168.4.1");
     s_ap_active = true;
 
