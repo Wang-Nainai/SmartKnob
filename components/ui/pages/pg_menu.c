@@ -24,6 +24,7 @@ typedef struct {
     int focus;
     lv_obj_t *rows[6];
     lv_obj_t *icons[6];
+    lv_obj_t *infos[6];
 } menu_data_t;
 
 typedef struct {
@@ -66,7 +67,10 @@ static void menu_set_focus(menu_data_t *d, int idx)
         } else {
             lv_obj_remove_state(d->icons[i], LV_STATE_FOCUSED);
         }
+        /* 说明文字仅聚焦行显示(不再靠背景遮挡, 透明背景下会透出) */
+        lv_obj_add_flag(d->infos[i], LV_OBJ_FLAG_HIDDEN);
     }
+    lv_obj_remove_flag(d->infos[idx], LV_OBJ_FLAG_HIDDEN);
     lv_obj_scroll_to_view(d->rows[idx], LV_ANIM_ON);
 }
 
@@ -132,12 +136,14 @@ static void pg_menu_create(page_t *p)
         lv_label_set_text(name, items[i].name);
         d->icons[i] = icon;
 
-        /* 右侧灰色描述 (聚焦时从缩窄的图标列后露出) */
+        /* 右侧灰色描述 (仅聚焦行显示) */
         lv_obj_t *info = lv_label_create(row);
         lv_obj_set_style_text_color(info, lv_color_hex(XK_COLOR_GRAY), 0);
         lv_obj_set_style_text_font(info, &lv_font_msyh_16, 0);
         lv_label_set_text(info, items[i].desc);
         lv_obj_align(info, LV_ALIGN_LEFT_MID, ICON_W_FOCUS + 5, 0);
+        lv_obj_add_flag(info, LV_OBJ_FLAG_HIDDEN);
+        d->infos[i] = info;
 
         lv_obj_move_foreground(icon);
     }
