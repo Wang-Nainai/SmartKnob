@@ -149,12 +149,15 @@ void app_main(void)
 #endif
     );
 #if CONFIG_WIFI_AP_FALLBACK_ENABLE
-    if (!wifi_ok) {
-        /* STA 超时: 开热点进配网模式, 屏幕自动弹配网页; STA 后台持续重试 */
+    if (!wifi_ok && !wifi_ever_connected()) {
+        /* 从未连上过(密码错/路由器不可达): 开热点进配网模式;
+         * 连上过之后掉线的走后台无限重连, 不抢 STA 开热点 */
         ESP_LOGW(TAG, "WiFi not connected in %ds, starting SoftAP provisioning",
                  CONFIG_WIFI_AP_FALLBACK_TIMEOUT_SEC);
         wifi_ap_fallback_start();
         webcfg_start();   /* 热点网段立即提供管理页(httpd 绑定 0.0.0.0) */
+    } else if (!wifi_ok) {
+        ESP_LOGW(TAG, "WiFi connected before but dropped; keep reconnecting (no AP)");
     }
 #endif
     if (wifi_ok) {

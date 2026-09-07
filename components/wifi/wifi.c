@@ -21,6 +21,7 @@ static int s_retry_num = 0;
 static wifi_callback_t s_on_connected = NULL;
 static wifi_callback_t s_on_disconnected = NULL;
 static esp_ip4_addr_t s_ip_addr;
+static volatile bool s_ever_connected = false;   /* 本次开机是否连上过(事件任务写) */
 
 /* SoftAP 配网回退状态 (跨任务读: 事件任务写/LVGL 读, 用 volatile) */
 static volatile bool s_ap_active = false;
@@ -42,6 +43,7 @@ static void event_handler(void *arg, esp_event_base_t base, int32_t id, void *da
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)data;
         s_ip_addr = event->ip_info.ip;
+        s_ever_connected = true;
         ESP_LOGI(TAG, "connected, IP: " IPSTR, IP2STR(&s_ip_addr));
         s_retry_num = 0;
         app_state_set_wifi(true);
@@ -162,6 +164,11 @@ bool wifi_is_connected(void)
     return (bits & WIFI_CONNECTED_BIT) != 0;
 }
 
+bool wifi_ever_connected(void)
+{
+    return s_ever_connected;
+}
+
 void wifi_set_callbacks(wifi_callback_t on_connected, wifi_callback_t on_disconnected)
 {
     s_on_connected = on_connected;
@@ -202,8 +209,29 @@ void wifi_ap_fallback_start(void)
     /* 先置标志再动硬件: GOT_IP 事件若在配置期间到达, stop 路径能正确执行 */
     app_state_set_ap(true, s_ap_ssid, "192.168.4.1");
     s_ap_active = true;
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
+
+    /* 关键: STA 可能正处于重连风暴中(auth 失败/coex 策略刚生效),
+     * 此时直接 esp_wifi_set_mode(APSTA) 会在闭源库内崩溃
+     * (eb 分配失败 -> NULL 解引用, 实测 ieee80211_hostap_attach panic)。
+     * 先断开 STA 让协议栈收敛, 再切换模式; 失败也不 abort, 回滚即可 */
+    esp_wifi_disconnect();
+    vTaskDelay(pdMS_TO_TICKS(300));
+
+    esp_err_t err = esp_wifi_set_mode(WIFI_MODE_APSTA);
+    if (err != ESP_OK) {
+        s_ap_active = false;
+        app_state_set_ap(false, NULL, NULL);
+        ESP_LOGE(TAG, "AP mode start failed: %s", esp_err_to_name(err));
+        return;
+    }
+    err = esp_wifi_set_config(WIFI_IF_AP, &ap_config);
+    if (err != ESP_OK) {
+        esp_wifi_set_mode(WIFI_MODE_STA);
+        s_ap_active = false;
+        app_state_set_ap(false, NULL, NULL);
+        ESP_LOGE(TAG, "AP config failed: %s", esp_err_to_name(err));
+        return;
+    }
     ESP_LOGW(TAG, "AP fallback ON: ssid=%s ip=192.168.4.1 (web config)", s_ap_ssid);
     /* webcfg HTTP 服务由 main 在调用本函数后启动(httpd 绑定 0.0.0.0,
      * AP/STA 网段均可达); 此处不再直接调用以避免 wifi->webcfg 循环依赖 */
