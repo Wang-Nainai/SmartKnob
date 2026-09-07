@@ -35,7 +35,7 @@ static const char *TAG = "display";
 #define PIN_NUM_LCD_BL     21
 #define PIN_NUM_TOUCH_CS   14
 
-#define LVGL_DRAW_BUF_LINES    40
+#define LVGL_DRAW_BUF_LINES    30   /* 40->30: 省 9.6KB 内部 RAM, 刷新影响可忽略 */
 #define LVGL_TICK_PERIOD_MS    2
 #define LVGL_TASK_MAX_DELAY_MS 500
 #define LVGL_TASK_MIN_DELAY_MS 5

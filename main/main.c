@@ -4,6 +4,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_sntp.h"
+#include "esp_heap_caps.h"
 #include "nvs_flash.h"
 #include "led.h"
 #include "wifi.h"
@@ -157,6 +158,11 @@ void app_main(void)
     mqtt_ha_init();   /* 幂等; 断网时 esp-mqtt 自动重试, 联网即接上 */
 
     while (1) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        /* 堆水位监控: BLE+WiFi 同开时防堆耗尽(曾致 wifi 丢包 + printf 断言崩溃) */
+        ESP_LOGI(TAG, "heap free=%u min=%u largest=%u",
+                 (unsigned)esp_get_free_heap_size(),
+                 (unsigned)esp_get_minimum_free_heap_size(),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+        vTaskDelay(pdMS_TO_TICKS(10000));
     }
 }
