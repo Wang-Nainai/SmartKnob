@@ -40,9 +40,10 @@ static const char *TAG = "display";
 #define PIN_NUM_LCD_BL     21
 #define PIN_NUM_TOUCH_CS   14
 
-#define LVGL_DRAW_BUF_LINES    20   /* 30->20: BLE 控制器/SoftAP 连接期分配在内部内存
-                                     * 已实测两次 Malloc fail / eb alloc fail,
-                                     * 缓冲是最大的可控占用(再省 9.6KB); 流畅度靠 80MHz 时钟 */
+#define LVGL_DRAW_BUF_LINES    30   /* 20->30: 滑动卡顿主因就是 20 行缓冲
+                                     * (滚动=连续局部刷新, 缓冲小则每帧冲刷次数暴涨)。
+                                     * BLE 池已裁剪(ACL 24->8, MSYS 减半)省 ~19KB,
+                                     * 有预算还回 9.6KB; 若 BLE 再 Malloc fail 再微调 */
 #define LVGL_TICK_PERIOD_MS    2
 #define LVGL_TASK_MAX_DELAY_MS 500
 #define LVGL_TASK_MIN_DELAY_MS 5
