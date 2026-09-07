@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include "page_mgr.h"
 #include "motor.h"
+#include "display.h"
 
 LV_FONT_DECLARE(lv_font_montserrat_32);
 
@@ -17,7 +18,8 @@ static void anim_width_cb(void *obj, int32_t v)
 static void startup_on_timer(lv_timer_t *t)
 {
     LV_UNUSED(t);
-    pm_replace(PAGE_MENU);
+    /* 未触摸校准过: 先进校准向导, 完成后由向导进入主页 */
+    pm_replace(display_touch_cal_active() ? PAGE_MENU : PAGE_TCAL);
     pm_shake();
 }
 

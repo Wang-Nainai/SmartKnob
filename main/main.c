@@ -138,6 +138,9 @@ void app_main(void)
     wifi_init();
     init_sntp();
 
+    /* httpd 绑定 0.0.0.0, 开机即启动, 不依赖 netif/WiFi 事件任务上下文 */
+    webcfg_start();
+
     bool wifi_ok = wifi_wait_connected(
 #if CONFIG_WIFI_AP_FALLBACK_ENABLE
         CONFIG_WIFI_AP_FALLBACK_TIMEOUT_SEC * 1000

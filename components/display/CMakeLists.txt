@@ -1,3 +1,3 @@
 idf_component_register(SRCS "display.c"
                        INCLUDE_DIRS include
-                       REQUIRES esp_lcd driver lvgl__lvgl)
+                       REQUIRES esp_lcd driver lvgl__lvgl nvs_flash)

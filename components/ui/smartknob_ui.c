@@ -38,6 +38,7 @@ extern const page_ops_t pg_sysinfo_ops;
 extern const page_ops_t pg_factory_ops;
 extern const page_ops_t pg_apcfg_ops;
 extern const page_ops_t pg_sysmon_ops;
+extern const page_ops_t pg_tcal_ops;
 
 static const page_ops_t *const page_ops_table[PAGE_COUNT] = {
     [PAGE_STARTUP]    = &pg_startup_ops,
@@ -51,6 +52,7 @@ static const page_ops_t *const page_ops_table[PAGE_COUNT] = {
     [PAGE_FACTORY]    = &pg_factory_ops,
     [PAGE_APCFG]      = &pg_apcfg_ops,
     [PAGE_SYSMON]     = &pg_sysmon_ops,
+    [PAGE_TCAL]       = &pg_tcal_ops,
 };
 
 /* ---------------- page stack ---------------- */
@@ -401,6 +403,10 @@ static void page_gesture_cb(lv_event_t *e)
     }
     page_t *top = pm_top();
     if (!top) {
+        return;
+    }
+    if (top->ops == &pg_tcal_ops) {
+        lv_indev_reset(indev, NULL);   /* 校准页: 触摸即采样, 不响应手势 */
         return;
     }
     if (top->ops == &pg_pcdial_ops) {

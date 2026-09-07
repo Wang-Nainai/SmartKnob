@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <string.h>
 #include <math.h>
 #include <sys/lock.h>
 #include "freertos/FreeRTOS.h"
@@ -15,6 +16,7 @@
 #include "driver/spi_master.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "nvs.h"
 #include "lvgl.h"
 #include "display.h"
 
@@ -170,6 +172,57 @@ typedef struct {
 static xpt2046_state_t s_tp = { .io = NULL };
 static float s_press_base = -1.0f;   /* 静息压力自适应基线 */
 
+/* ---- 触摸四点校准(仿射变换) ----
+ * 板轴与屏幕的 轴序/镜像/缩放/偏移 无法预先假定, 校准一次性解决:
+ *   x' = a*rx + b*ry + c    y' = d*rx + e*ry + f
+ * 由校准向导(pg_tcal)采样四角最小二乘拟合, 存 NVS 开机自动加载 */
+static float s_cal_m[6];
+static bool s_cal_ok = false;
+
+bool display_touch_cal_active(void)
+{
+    return s_cal_ok;
+}
+
+void display_touch_cal_set(const float m[6])
+{
+    memcpy(s_cal_m, m, sizeof(s_cal_m));
+    s_cal_ok = true;
+}
+
+esp_err_t display_touch_cal_save(const float m[6])
+{
+    nvs_handle_t h;
+    esp_err_t err = nvs_open("touchcal", NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = nvs_set_blob(h, "m6", m, sizeof(s_cal_m));
+    if (err == ESP_OK) {
+        err = nvs_commit(h);
+    }
+    nvs_close(h);
+    return err;
+}
+
+static void touch_cal_load(void)
+{
+    nvs_handle_t h;
+    if (nvs_open("touchcal", NVS_READONLY, &h) != ESP_OK) {
+        return;
+    }
+    size_t len = 0;
+    if (nvs_get_blob(h, "m6", NULL, &len) == ESP_OK && len == sizeof(s_cal_m)) {
+        float m[6];
+        if (nvs_get_blob(h, "m6", m, &len) == ESP_OK) {
+            memcpy(s_cal_m, m, sizeof(s_cal_m));
+            s_cal_ok = true;
+            ESP_LOGI(TAG, "touch calibration loaded from NVS");
+        }
+    }
+    nvs_close(h);
+}
+
 static uint16_t tp_read_reg(uint8_t cmd)
 {
     uint8_t buf[2] = {0, 0};
@@ -290,19 +343,31 @@ static void tp_poll(void)
     }
     s_tp.touched = true;
 
-    uint16_t mx = tp_map(rx, CONFIG_TOUCH_X_MIN, CONFIG_TOUCH_X_MAX, LCD_H_RES);
-    uint16_t my = tp_map(ry, CONFIG_TOUCH_Y_MIN, CONFIG_TOUCH_Y_MAX, LCD_V_RES);
+    if (s_cal_ok) {
+        /* 已校准: 仿射变换(浮点, 16ms 一拍开销可忽略) */
+        float px = s_cal_m[0] * rx + s_cal_m[1] * ry + s_cal_m[2];
+        float py = s_cal_m[3] * rx + s_cal_m[4] * ry + s_cal_m[5];
+        if (px < 0) px = 0;
+        if (px > LCD_H_RES - 1) px = LCD_H_RES - 1;
+        if (py < 0) py = 0;
+        if (py > LCD_V_RES - 1) py = LCD_V_RES - 1;
+        s_tp.x = (uint16_t)px;
+        s_tp.y = (uint16_t)py;
+    } else {
+        uint16_t mx = tp_map(rx, CONFIG_TOUCH_X_MIN, CONFIG_TOUCH_X_MAX, LCD_H_RES);
+        uint16_t my = tp_map(ry, CONFIG_TOUCH_Y_MIN, CONFIG_TOUCH_Y_MAX, LCD_V_RES);
 #if CONFIG_TOUCH_SWAP_XY
-    uint16_t t = mx; mx = my; my = t;
+        uint16_t t = mx; mx = my; my = t;
 #endif
 #if CONFIG_TOUCH_MIRROR_X
-    mx = LCD_H_RES - 1 - mx;
+        mx = LCD_H_RES - 1 - mx;
 #endif
 #if CONFIG_TOUCH_MIRROR_Y
-    my = LCD_V_RES - 1 - my;
+        my = LCD_V_RES - 1 - my;
 #endif
-    s_tp.x = mx;
-    s_tp.y = my;
+        s_tp.x = mx;
+        s_tp.y = my;
+    }
 }
 
 bool display_touch_get_raw(uint16_t *z1, uint16_t *z2, uint16_t *raw_x, uint16_t *raw_y)
@@ -539,6 +604,8 @@ esp_err_t display_init(void)
     lv_indev_set_display(indev, lvgl_disp);
     lv_indev_set_user_data(indev, &s_tp);
     lv_indev_set_read_cb(indev, lvgl_touch_cb);
+
+    touch_cal_load();   /* 已校准则启用仿射映射 */
 
     ESP_LOGI(TAG, "Create LVGL task");
     xTaskCreatePinnedToCore(lvgl_port_task, "LVGL", LVGL_TASK_STACK_SIZE, NULL, LVGL_TASK_PRIORITY, NULL, LVGL_TASK_CORE);
