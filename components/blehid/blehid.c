@@ -395,6 +395,7 @@ void blehid_consumer_send(uint16_t usage)
     if (!s_connected || proto_mode_val == 0) {
         return;   /* boot 协议无 consumer 格式 */
     }
+    ESP_LOGI(TAG, "consumer send usage=0x%02X (report_id=1)", usage);
     uint8_t press[3] = { 0x01, (uint8_t)(usage & 0xFF), (uint8_t)(usage >> 8) };
     uint8_t release[3] = { 0x01, 0x00, 0x00 };
     notify(h_consumer_report, press, 3);
