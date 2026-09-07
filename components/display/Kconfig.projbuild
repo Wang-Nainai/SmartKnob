@@ -2,11 +2,12 @@ menu "Display / Touch Configuration"
 
 config TOUCH_Z_THRESHOLD
     int "XPT2046 touch pressure threshold (z1 + 4095 - z2)"
-    default 300
+    default 400
     range 10 4000
     help
         触摸压力判定阈值。数值越小越灵敏。
         实测: 未按下时 z1+4095-z2 接近 0, 按下时通常 > 300。
+        静息读数波动时(如 z2≈3720)压力约 375, 默认 400 可避免幽灵触摸。
 
 config TOUCH_X_MIN
     int "XPT2046 raw X at screen left edge"

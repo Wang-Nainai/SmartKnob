@@ -194,6 +194,7 @@ static void client_start_locked(void)
         .credentials.client_id = CONFIG_MQTT_HA_CLIENT_ID,
         .session.keepalive = 60,
         .network.reconnect_timeout_ms = 5000,
+        .network.timeout_ms = 30000,   /* BLE 广播抢占空口时发布变慢, 默认 10s 会误超时 */
         .task.stack_size = 4096,   /* 默认 6144, 开机 BLE+WiFi 同开后 6KB 连续栈可能分配失败 */
     };
     char uri[128] = {0};
