@@ -40,8 +40,9 @@ static const char *TAG = "display";
 #define PIN_NUM_LCD_BL     21
 #define PIN_NUM_TOUCH_CS   14
 
-#define LVGL_DRAW_BUF_LINES    40   /* 60->40: WiFi 驱动初始化需要成块内部 DMA 内存,
-                                     * 缓冲过大会把它挤到 NO_MEM; 40 行仍比最初 30 行省冲刷 */
+#define LVGL_DRAW_BUF_LINES    30   /* 40->30: BLE 控制器连接期要内部内存,
+                                     * 缓冲大 -9.6KB 后实测 BLE_INIT Malloc failed;
+                                     * 流畅度主要靠 80MHz 时钟, 缓冲回到安全值 */
 #define LVGL_TICK_PERIOD_MS    2
 #define LVGL_TASK_MAX_DELAY_MS 500
 #define LVGL_TASK_MIN_DELAY_MS 5
