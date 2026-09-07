@@ -3,6 +3,7 @@
 #include "page_mgr.h"
 #include "motor.h"
 #include "display.h"
+#include "blehid.h"
 
 LV_FONT_DECLARE(lv_font_montserrat_26);
 LV_FONT_DECLARE(lv_font_msyh_16);
@@ -26,11 +27,12 @@ typedef struct {
     int focus;
     int edit_item;          /* -1 = 列表, 否则 0/1 */
     int32_t brightness;
+    int32_t ble_feedback_until;   /* 蓝牙清除反馈文本显示截止时刻 */
     int32_t timeout_min;
     lv_obj_t *list;         /* 设置列表滚动容器 */
-    lv_obj_t *rows[3];
-    lv_obj_t *icons[3];
-    lv_obj_t *val_labels[3];
+    lv_obj_t *rows[4];
+    lv_obj_t *icons[4];
+    lv_obj_t *val_labels[4];
     lv_obj_t *edit_scr;
     lv_obj_t *scale;
     lv_obj_t *needle;
@@ -42,6 +44,7 @@ typedef struct {
 #define SET_BRIGHTNESS 0
 #define SET_TIMEOUT    1
 #define SET_SYSMON     2
+#define SET_BLE        3
 
 static void setting_refresh_rows(setting_data_t *d)
 {
@@ -51,7 +54,7 @@ static void setting_refresh_rows(setting_data_t *d)
     snprintf(buf, sizeof(buf), "%ld \xE5\x88\x86\xE9\x92\x9F", (long)d->timeout_min);
     lv_label_set_text(d->val_labels[SET_TIMEOUT], buf);
 
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 4; i++) {
         if (i == d->focus) {
             lv_obj_add_state(d->icons[i], LV_STATE_FOCUSED);
         } else {
@@ -108,6 +111,21 @@ static void setting_row_cb(lv_event_t *e)
         if (idx == SET_SYSMON) {
             pm_push(PAGE_SYSMON);
             pm_shake();
+        } else if (idx == SET_BLE) {
+            /* 清除蓝牙配对: 双击确认防误触 */
+            static int32_t pending_until = 0;
+            int32_t now = (int32_t)lv_tick_get();
+            if (now < pending_until) {
+                blehid_unpair_all();
+                pending_until = 0;
+                lv_label_set_text(d->val_labels[SET_BLE], "\xE5\xB7\xB2\xE6\xB8\x85\xE9\x99\xA4"); /* 已清除 */
+                d->ble_feedback_until = now + 3000;
+                pm_shake();
+            } else {
+                pending_until = now + 4000;
+                lv_label_set_text(d->val_labels[SET_BLE],
+                                  "\xE5\x86\x8D\xE7\x82\xB9\xE4\xB8\x80\xE6\xAC\xA1\xE7\xA1\xAE\xE8\xAE\xA4"); /* 再点一次确认 */
+            }
         } else {
             setting_show_edit(d, idx);
         }
@@ -127,6 +145,11 @@ static void setting_edit_tap_cb(lv_event_t *e)
 static void setting_timer_cb(lv_timer_t *t)
 {
     setting_data_t *d = lv_timer_get_user_data(t);
+    /* 蓝牙清除反馈: 到时清掉提示文本 */
+    if (d->ble_feedback_until != 0 && (int32_t)lv_tick_get() > d->ble_feedback_until) {
+        lv_label_set_text(d->val_labels[SET_BLE], "");
+        d->ble_feedback_until = 0;
+    }
     if (d->edit_item < 0) return;
 
     int32_t pos = motor_get_position();
@@ -152,20 +175,23 @@ static void pg_setting_create(page_t *p)
     d->timeout_min = display_get_screen_timeout() / 60;
     p->title = "\xE8\xAE\xBE\xE7\xBD\xAE";
 
-    static const char *names[3] = {
+    static const char *names[4] = {
         "\xE4\xBA\xAE\xE5\xBA\xA6",                 /* 亮度 */
         "\xE7\x86\x84\xE5\xB1\x8F\xE6\x97\xB6\xE9\x95\xBF", /* 熄屏时长 */
         "\xE7\xB3\xBB\xE7\xBB\x9F\xE7\x9B\x91\xE6\x8E\xA7", /* 系统监控 */
+        "\xE8\x93\x9D\xE7\x89\x99",                 /* 蓝牙 */
     };
-    static const char *icons[3] = {
+    static const char *icons[4] = {
         LV_SYMBOL_DOWN,
         LV_SYMBOL_BELL,
         LV_SYMBOL_SETTINGS,
+        LV_SYMBOL_BLUETOOTH,
     };
-    static const char *descs[3] = {
+    static const char *descs[4] = {
         "\xE5\xB1\x8F\xE5\xB9\x95\xE8\x83\x8C\xE5\x85\x89" "\n10 - 100 %",
         "\xE8\x87\xAA\xE5\x8A\xA8\xE7\x86\x84\xE5\xB1\x8F" "\n0 - 30 \xE5\x88\x86\xE9\x92\x9F",
         "CPU / RAM / \xE4\xBB\xBB\xE5\x8A\xA1\xE8\xA1\xA8",
+        "\xE6\xB8\x85\xE9\x99\xA4\xE5\xB7\xB2\xE9\x85\x8D\xE5\xAF\xB9\xE8\xAE\xBE\xE5\xA4\x87" /* 清除已配对设备 */,
     };
 
     /* 列表: 独立滚动容器(flex), 编辑视图作为根上浮层, 互不影响 */
@@ -178,7 +204,7 @@ static void pg_setting_create(page_t *p)
     lv_obj_set_flex_align(list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_ver(list, LIST_PAD, 0);
 
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 4; i++) {
         lv_obj_t *row = lv_obj_create(list);
         lv_obj_remove_style_all(row);
         lv_obj_set_size(row, 220, ROW_H);

@@ -358,6 +358,15 @@ void blehid_disconnect(void)
     }
 }
 
+void blehid_unpair_all(void)
+{
+    /* 先断开当前连接(否则加密链路悬在旧密钥上), 再逐个删除绑定 */
+    blehid_disconnect();
+    while (ble_gap_unpair_oldest_peer() == 0) {
+    }
+    ESP_LOGI(TAG, "all bonds cleared");
+}
+
 void blehid_consumer_send(uint16_t usage)
 {
     if (!s_connected) {
