@@ -309,10 +309,9 @@ static void pg_setting_on_rotate(page_t *p, int32_t steps)
 {
     setting_data_t *d = p->data;
     if (d->edit_item < 0) {
-        d->focus = (d->focus + steps) % 2;
-        if (d->focus < 0) {
-            d->focus += 2;
-        }
+        d->focus += steps;
+        if (d->focus < 0) d->focus = 0;
+        if (d->focus > 1) d->focus = 1;
         setting_refresh_rows(d);
     }
     /* 编辑模式: 值由电机档位控制, timer 读取 */

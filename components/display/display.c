@@ -20,7 +20,7 @@
 static const char *TAG = "display";
 
 #define LCD_HOST          SPI2_HOST
-#define LCD_PIXEL_CLOCK_HZ (20 * 1000 * 1000)
+#define LCD_PIXEL_CLOCK_HZ (40 * 1000 * 1000)   /* 40MHz; 若面包板接线花屏, 改回 20 */
 #define LCD_H_RES          240
 #define LCD_V_RES          320
 #define LCD_CMD_BITS       8
@@ -167,7 +167,7 @@ typedef struct {
 } xpt2046_state_t;
 
 static xpt2046_state_t s_tp = { .io = NULL };
-static volatile bool s_swipe_back = false;   /* 滑动返回手势锁存(UI 任务消费) */
+static volatile touch_gesture_t s_gesture = TOUCH_GEST_NONE;   /* 滑动手势锁存(UI 任务消费) */
 
 static uint16_t tp_read_reg(uint8_t cmd)
 {
@@ -300,67 +300,80 @@ static void lvgl_touch_cb(lv_indev_t *indev, lv_indev_data_t *data)
     }
 
     /* ---- 触摸接触状态机 ----
-     * 目的: 水平滑动(返回手势)不得误触发列表项 CLICKED。
      * WAIT: 按下后先不上报 PRESSED, 观察位移方向
      *   - 横向主导(|dx|>15 且 |dx|>=|dy|) -> 判为横滑: 整个接触期保持
-     *     RELEASED(LVGL 不会产生 CLICKED), 抬起时锁存滑动返回手势
+     *     RELEASED(不产生 CLICKED), 抬起时按方向锁存手势
      *   - 纵向主导 -> 上报 PRESSED (列表可正常滚动)
-     *   - 120ms 内几乎未动 -> 判为点击: 上报 PRESSED, 抬起产生 CLICKED */
+     *   - 快速抬起(<120ms 且几乎未动) -> 重放 PRESSED+RELEASED
+     *     (保证快速轻点也能产生 CLICKED) */
     static bool prev_touched = false;
     static int16_t start_x = 0, start_y = 0;
+    static int16_t last_x = 0, last_y = 0;
     static int32_t down_tick = 0;
-    typedef enum { TC_IDLE, TC_WAIT, TC_PRESSED, TC_SWIPE } tstate_t;
+    typedef enum { TC_IDLE, TC_WAIT, TC_PRESSED, TC_SWIPE, TC_TAP_REPLAY } tstate_t;
     static tstate_t tc_state = TC_IDLE;
 
-    if (s_tp.touched && !prev_touched) {
+    bool cur_touched = s_tp.touched;
+    if (cur_touched) {
+        last_x = (int16_t)s_tp.x;
+        last_y = (int16_t)s_tp.y;
+    }
+    int dx = (int)last_x - start_x;
+    int dy = (int)last_y - start_y;
+    int32_t held = (int32_t)(esp_timer_get_time() / 1000) - down_tick;
+
+    if (cur_touched && !prev_touched) {
         start_x = (int16_t)s_tp.x;
         start_y = (int16_t)s_tp.y;
         down_tick = (int32_t)(esp_timer_get_time() / 1000);
         tc_state = TC_WAIT;
     }
-    int dx = (int)s_tp.x - start_x;
-    int dy = (int)s_tp.y - start_y;
-    int32_t held = (int32_t)(esp_timer_get_time() / 1000) - down_tick;
 
     switch (tc_state) {
     case TC_WAIT:
-        if (!s_tp.touched) {
-            tc_state = TC_IDLE;
+        if (!cur_touched) {
+            tc_state = TC_TAP_REPLAY;   /* 快速轻点: 重放按下->抬起产生 CLICKED */
         } else if (abs(dx) > 15 && abs(dx) >= abs(dy)) {
-            tc_state = TC_SWIPE;      /* 横滑: 不上报按下 */
+            tc_state = TC_SWIPE;        /* 横滑: 不上报按下 */
         } else if ((abs(dy) > 15 && abs(dy) > abs(dx)) || held > 120) {
-            tc_state = TC_PRESSED;    /* 纵滑或点击 */
+            tc_state = TC_PRESSED;      /* 纵滑或长按 */
         }
         break;
     case TC_SWIPE:
-        if (!s_tp.touched) {
-            /* 抬起: 锁存滑动返回手势 */
-            if (abs(dx) > 60 && abs(dx) > 2 * abs(dy)) {
-                s_swipe_back = true;
+        if (!cur_touched) {
+            if (abs(dx) > 60) {
+                if (abs(dx) > abs(dy) * 2) {
+                    s_gesture = (dx > 0) ? TOUCH_GEST_SWIPE_RIGHT : TOUCH_GEST_SWIPE_LEFT;
+                } else {
+                    s_gesture = (dy > 0) ? TOUCH_GEST_SWIPE_DOWN : TOUCH_GEST_SWIPE_UP;
+                }
             }
             tc_state = TC_IDLE;
         }
         break;
     case TC_PRESSED:
-        if (!s_tp.touched) {
+        if (!cur_touched) {
             tc_state = TC_IDLE;
         }
         break;
+    case TC_TAP_REPLAY:
+        /* 上一拍已报 PRESSED, 这一拍报 RELEASED 完成 CLICKED */
+        tc_state = TC_IDLE;
+        break;
     default:
-        if (s_tp.touched) {
-            tc_state = TC_WAIT;
-            start_x = (int16_t)s_tp.x;
-            start_y = (int16_t)s_tp.y;
-            down_tick = (int32_t)(esp_timer_get_time() / 1000);
-        }
         break;
     }
-    prev_touched = s_tp.touched;
+    prev_touched = cur_touched;
 
     switch (tc_state) {
     case TC_PRESSED:
         data->point.x = s_tp.x;
         data->point.y = s_tp.y;
+        data->state = LV_INDEV_STATE_PRESSED;
+        break;
+    case TC_TAP_REPLAY:
+        data->point.x = start_x;
+        data->point.y = start_y;
         data->state = LV_INDEV_STATE_PRESSED;
         break;
     default:
@@ -369,10 +382,10 @@ static void lvgl_touch_cb(lv_indev_t *indev, lv_indev_data_t *data)
     }
 }
 
-bool display_touch_pop_gesture(void)
+touch_gesture_t display_touch_pop_gesture(void)
 {
-    bool g = s_swipe_back;
-    s_swipe_back = false;
+    touch_gesture_t g = s_gesture;
+    s_gesture = TOUCH_GEST_NONE;
     return g;
 }
 

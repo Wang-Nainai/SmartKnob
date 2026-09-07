@@ -8,6 +8,7 @@
 #include "webcfg.h"
 #include "led.h"
 #include "motor.h"
+#include "esp_timer.h"
 #include "freertos/semphr.h"
 #include <stdlib.h>
 
@@ -40,8 +41,31 @@ static volatile uint8_t s_has_data = 0;
 
 #define MQTT_DEV_NUM 4
 
-static void publish_device_automation(esp_mqtt_client_handle_t client);
+/* ---------------- HA 设备自动化触发器 (旋钮 → HA 任意设备) ----------------
+ * 发布 16 个 device_automation 触发器(4 设备 x on/off/left/right)的发现配置,
+ * HA 界面里 SmartKnob 设备出现这些"动作", 自动化可视化绑定到任意实体, 无需 YAML。
+ * 触发消息: smartknob/action  payload = <dev>_<act> (如 light_on) */
 
+static const char *ha_dev_keys[MQTT_DEV_NUM] = {"light", "ac", "fan", "washer"};
+static const char *ha_dev_acts[4] = {"on", "off", "left", "right"};
+
+static void publish_trigger_one(esp_mqtt_client_handle_t client, int dev, int act)
+{
+    char topic[160];
+    char payload[320];
+    snprintf(topic, sizeof(topic),
+             "homeassistant/device_automation/" MQTT_DEVICE "/%s_%s/config",
+             ha_dev_keys[dev], ha_dev_acts[act]);
+    snprintf(payload, sizeof(payload),
+             "{\"automation_type\":\"trigger\",\"topic\":\"smartknob/action\","
+             "\"payload\":\"%s_%s\",\"type\":\"action\",\"subtype\":\"button_%d\","
+             "\"device\":{\"identifiers\":[\"" MQTT_DEVICE "\"],\"name\":\"SmartKnob\","
+             "\"manufacturer\":\"DIY\",\"model\":\"SmartKnob\"}}",
+             ha_dev_keys[dev], ha_dev_acts[act], dev * 4 + act + 1);
+    esp_mqtt_client_publish(client, topic, payload, 0, 1, 1);
+}
+
+/* 传感器发现: 3 条小消息(连接时立即发送) */
 static void publish_discovery(esp_mqtt_client_handle_t client)
 {
     char payload[512];
@@ -70,38 +94,25 @@ static void publish_discovery(esp_mqtt_client_handle_t client)
         "\"state_topic\":\"" MQTT_TOPIC_STATE "\",\"value_template\":\"{{ value_json.rh }}\","
         "\"device\":{\"identifiers\":[\"" MQTT_DEVICE "\"],\"name\":\"SmartKnob\",\"manufacturer\":\"DIY\"}}");
     esp_mqtt_client_publish(client, MQTT_TOPIC_RH, payload, len, 1, 1);
-
-    publish_device_automation(client);
 }
 
-/* ---------------- HA 设备自动化触发器 (旋钮 → HA 任意设备) ----------------
- * 发布 16 个 device_automation 触发器(4 设备 x on/off/left/right)的发现配置,
- * HA 界面里 SmartKnob 设备出现这些"动作", 自动化可视化绑定到任意实体, 无需 YAML。
- * 触发消息: smartknob/action  payload = <dev>_<act> (如 light_on) */
+/* 16 条触发器发现错开发送: BLE 广播抢占空口时连发 19 条会写超时掉线,
+ * 改为每 400ms 发 1 条(esp_timer 回调仅入队, 非阻塞) */
+static esp_timer_handle_t s_disc_timer = NULL;
+static int s_disc_i = 0;
 
-static const char *ha_dev_keys[MQTT_DEV_NUM] = {"light", "ac", "fan", "washer"};
-static const char *ha_dev_acts[4] = {"on", "off", "left", "right"};
-
-static void publish_device_automation(esp_mqtt_client_handle_t client)
+static void disc_timer_cb(void *arg)
 {
-    char topic[160];
-    char payload[320];
-    for (int d = 0; d < MQTT_DEV_NUM; d++) {
-        for (int a = 0; a < 4; a++) {
-            snprintf(topic, sizeof(topic),
-                     "homeassistant/device_automation/" MQTT_DEVICE "/%s_%s/config",
-                     ha_dev_keys[d], ha_dev_acts[a]);
-            snprintf(payload, sizeof(payload),
-                     "{\"automation_type\":\"trigger\",\"topic\":\"smartknob/action\","
-                     "\"payload\":\"%s_%s\",\"type\":\"action\",\"subtype\":\"button_%d\","
-                     "\"device\":{\"identifiers\":[\"" MQTT_DEVICE "\"],\"name\":\"SmartKnob\","
-                     "\"manufacturer\":\"DIY\",\"model\":\"SmartKnob\"}}",
-                     ha_dev_keys[d], ha_dev_acts[a], d * 4 + a + 1);
-            esp_mqtt_client_publish(client, topic, payload, 0, 1, 1);
-        }
+    if (!s_connected || !s_client) {
+        return;
     }
-    /* 订阅 HA → 旋钮 命令通道 */
-    esp_mqtt_client_subscribe(client, "smartknob/cmnd/#", 1);
+    if (s_disc_i < MQTT_DEV_NUM * 4) {
+        publish_trigger_one(s_client, s_disc_i / 4, s_disc_i % 4);
+        s_disc_i++;
+    } else {
+        esp_timer_stop(s_disc_timer);
+        ESP_LOGI(TAG, "discovery complete (%d msgs)", s_disc_i);
+    }
 }
 
 /* ---------------- HA → 旋钮 命令 (smartknob/cmnd/<cmd>) ---------------- */
@@ -164,12 +175,25 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         ESP_LOGI(TAG, "Connected to broker");
         webcfg_set_mqtt_connected(true);
         led_set_color(0, 255, 255);   /* 青: WiFi+MQTT 就绪 */
-        publish_discovery(client);
+        publish_discovery(client);            /* 3 条传感器发现 */
+        esp_mqtt_client_subscribe(client, "smartknob/cmnd/#", 1);
+        /* 16 条触发器发现逐条错开发送(400ms/条), 防止 BLE 抢空口时写超时 */
+        if (!s_disc_timer) {
+            const esp_timer_create_args_t targs = {
+                .callback = disc_timer_cb, .name = "ha_disc",
+            };
+            esp_timer_create(&targs, &s_disc_timer);
+        }
+        s_disc_i = 0;
+        esp_timer_start_periodic(s_disc_timer, 400 * 1000);
         publish_state(client);
         break;
     case MQTT_EVENT_DISCONNECTED:
         s_connected = false;
         webcfg_set_mqtt_connected(false);
+        if (s_disc_timer) {
+            esp_timer_stop(s_disc_timer);
+        }
         ESP_LOGW(TAG, "Disconnected from broker");
         led_set_color(0, 255, 0);     /* 绿: 仅 WiFi */
         break;

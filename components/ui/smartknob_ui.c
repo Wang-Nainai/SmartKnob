@@ -382,14 +382,22 @@ static void status_bar_create(void)
 static void input_timer_cb(lv_timer_t *t)
 {
     (void)t;
-    /* 滑动手势: 水平滑动 = 返回上一页(不用瞄准小按钮) */
-    if (display_touch_pop_gesture()) {
+    /* 滑动手势路由: S-Dial 页自用(横滑=音量/竖滑=滚轮), 其它页横滑=返回 */
+    touch_gesture_t g = display_touch_pop_gesture();
+    if (g != TOUCH_GEST_NONE) {
         display_notify_activity();
         if (!pm_animating) {
             page_t *top = pm_top();
-            if (top && top->ops->on_back) {
-                top->ops->on_back(top);
-                pm_shake();
+            if (top) {
+                if (top->ops == &pg_pcdial_ops) {
+                    extern void pg_pcdial_handle_gesture(int g);
+                    pg_pcdial_handle_gesture((int)g);
+                } else if (g == TOUCH_GEST_SWIPE_LEFT || g == TOUCH_GEST_SWIPE_RIGHT) {
+                    if (top->ops->on_back) {
+                        top->ops->on_back(top);
+                        pm_shake();
+                    }
+                }
             }
         }
         return;

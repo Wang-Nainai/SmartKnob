@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "page_mgr.h"
+#include "display.h"
 #include "motor.h"
 #include "blehid.h"
 
@@ -217,6 +218,41 @@ static void pg_pcdial_on_back(page_t *p)
 static void pg_pcdial_on_tick(page_t *p)
 {
     pc_ble_status_refresh((pc_data_t *)p->data);
+}
+
+/* 触摸手势(由 smartknob_ui 路由): 横滑=音量加减, 竖滑=鼠标滚轮
+ * g 取值见 display.h touch_gesture_t */
+void pg_pcdial_handle_gesture(int g)
+{
+    if (!blehid_is_connected()) {
+        return;
+    }
+    /* 节流: 手势连发时限制发送频率 */
+    static uint32_t last_gesture_tick = 0;
+    uint32_t now = lv_tick_get();
+    if (now - last_gesture_tick < 150) {
+        return;
+    }
+    last_gesture_tick = now;
+
+    switch (g) {
+    case (int)TOUCH_GEST_SWIPE_RIGHT:
+        blehid_consumer_send(HID_CONSUMER_VOLUME_UP);
+        pm_shake();
+        break;
+    case (int)TOUCH_GEST_SWIPE_LEFT:
+        blehid_consumer_send(HID_CONSUMER_VOLUME_DOWN);
+        pm_shake();
+        break;
+    case (int)TOUCH_GEST_SWIPE_UP:
+        blehid_mouse_scroll(2);
+        break;
+    case (int)TOUCH_GEST_SWIPE_DOWN:
+        blehid_mouse_scroll(-2);
+        break;
+    default:
+        break;
+    }
 }
 
 const page_ops_t pg_pcdial_ops = {
