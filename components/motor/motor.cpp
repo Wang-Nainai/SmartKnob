@@ -177,6 +177,14 @@ static const knob_config_t knob_configs[MOTOR_MODE_COUNT] = {
         .snap_point = 0.55, .snap_point_bias = 0.4,
         .detent_positions_count = 0, .detent_positions = {0}, .text = "回中带制动",
     },
+    [MOTOR_MODE_UNBOUNDED_DETENTS] = {
+        .position = 0,
+        .min_position = 0, .max_position = -1,   /* 无边界: 列表浏览用, 两个方向都能无限转 */
+        .position_width_radians = 8.225806452f * _PI / 180,
+        .detent_strength_unit = 2, .endstop_strength_unit = 1,
+        .snap_point = 1.1, .snap_point_bias = 0,
+        .detent_positions_count = 0, .detent_positions = {0}, .text = "无边界棘轮",
+    },
 };
 
 /* ---------------- 控制状态（仅 motor_task 写，跨任务只读快照） ---------------- */

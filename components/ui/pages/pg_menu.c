@@ -149,7 +149,7 @@ static void pg_menu_create(page_t *p)
     }
 
     menu_set_focus(d, 0);
-    motor_set_mode(MOTOR_MODE_COARSE_STRONG_DETENTS, 0, 0);
+    motor_set_mode(MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
 }
 
 static void pg_menu_destroy(page_t *p)
@@ -177,7 +177,7 @@ static void pg_menu_on_back(page_t *p)
 static void pg_menu_on_resume(page_t *p)
 {
     /* 从子页返回: 恢复菜单浏览手感(子页可能改过电机模式) */
-    motor_set_mode(MOTOR_MODE_COARSE_STRONG_DETENTS, 0, 0);
+    motor_set_mode(MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
 }
 
 static void pg_menu_on_tick(page_t *p)

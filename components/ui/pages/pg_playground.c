@@ -41,6 +41,7 @@ static void pg_apply_mode(pg_data_t *d)
     }
     case MOTOR_MODE_UNBOUND_NO_DETENTS:
     case MOTOR_MODE_MULTI_TURN_NO_DETENTS:
+    case MOTOR_MODE_UNBOUNDED_DETENTS:
     case MOTOR_MODE_AUTO_RETURN_CENTER: {
         lv_scale_set_total_tick_count(d->scale, 73);
         lv_scale_set_major_tick_every(d->scale, 1);
@@ -81,6 +82,7 @@ static void pg_playground_timer(lv_timer_t *t)
         break;
     case MOTOR_MODE_UNBOUND_NO_DETENTS:
     case MOTOR_MODE_MULTI_TURN_NO_DETENTS:
+    case MOTOR_MODE_UNBOUNDED_DETENTS:
     case MOTOR_MODE_AUTO_RETURN_CENTER:
         needle_val = pos % 72;
         if (needle_val < 0) needle_val += 72;

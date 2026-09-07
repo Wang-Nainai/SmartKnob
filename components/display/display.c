@@ -296,28 +296,77 @@ static void lvgl_touch_cb(lv_indev_t *indev, lv_indev_data_t *data)
     (void)indev;
     tp_poll();
     if (s_tp.touched) {
-        data->point.x = s_tp.x;
-        data->point.y = s_tp.y;
-        data->state = LV_INDEV_STATE_PRESSED;
         display_notify_activity();   /* 触摸同样唤醒/重置熄屏计时 */
-    } else {
-        data->state = LV_INDEV_STATE_RELEASED;
     }
 
-    /* ---- 滑动手势检测: 水平滑动 >60px 且明显大于纵向位移 => 返回 ---- */
+    /* ---- 触摸接触状态机 ----
+     * 目的: 水平滑动(返回手势)不得误触发列表项 CLICKED。
+     * WAIT: 按下后先不上报 PRESSED, 观察位移方向
+     *   - 横向主导(|dx|>15 且 |dx|>=|dy|) -> 判为横滑: 整个接触期保持
+     *     RELEASED(LVGL 不会产生 CLICKED), 抬起时锁存滑动返回手势
+     *   - 纵向主导 -> 上报 PRESSED (列表可正常滚动)
+     *   - 120ms 内几乎未动 -> 判为点击: 上报 PRESSED, 抬起产生 CLICKED */
     static bool prev_touched = false;
     static int16_t start_x = 0, start_y = 0;
+    static int32_t down_tick = 0;
+    typedef enum { TC_IDLE, TC_WAIT, TC_PRESSED, TC_SWIPE } tstate_t;
+    static tstate_t tc_state = TC_IDLE;
+
     if (s_tp.touched && !prev_touched) {
         start_x = (int16_t)s_tp.x;
         start_y = (int16_t)s_tp.y;
-    } else if (!s_tp.touched && prev_touched) {
-        int dx = (int)s_tp.x - start_x;
-        int dy = (int)s_tp.y - start_y;
-        if (abs(dx) > 60 && abs(dx) > 2 * abs(dy)) {
-            s_swipe_back = true;
+        down_tick = (int32_t)(esp_timer_get_time() / 1000);
+        tc_state = TC_WAIT;
+    }
+    int dx = (int)s_tp.x - start_x;
+    int dy = (int)s_tp.y - start_y;
+    int32_t held = (int32_t)(esp_timer_get_time() / 1000) - down_tick;
+
+    switch (tc_state) {
+    case TC_WAIT:
+        if (!s_tp.touched) {
+            tc_state = TC_IDLE;
+        } else if (abs(dx) > 15 && abs(dx) >= abs(dy)) {
+            tc_state = TC_SWIPE;      /* 横滑: 不上报按下 */
+        } else if ((abs(dy) > 15 && abs(dy) > abs(dx)) || held > 120) {
+            tc_state = TC_PRESSED;    /* 纵滑或点击 */
         }
+        break;
+    case TC_SWIPE:
+        if (!s_tp.touched) {
+            /* 抬起: 锁存滑动返回手势 */
+            if (abs(dx) > 60 && abs(dx) > 2 * abs(dy)) {
+                s_swipe_back = true;
+            }
+            tc_state = TC_IDLE;
+        }
+        break;
+    case TC_PRESSED:
+        if (!s_tp.touched) {
+            tc_state = TC_IDLE;
+        }
+        break;
+    default:
+        if (s_tp.touched) {
+            tc_state = TC_WAIT;
+            start_x = (int16_t)s_tp.x;
+            start_y = (int16_t)s_tp.y;
+            down_tick = (int32_t)(esp_timer_get_time() / 1000);
+        }
+        break;
     }
     prev_touched = s_tp.touched;
+
+    switch (tc_state) {
+    case TC_PRESSED:
+        data->point.x = s_tp.x;
+        data->point.y = s_tp.y;
+        data->state = LV_INDEV_STATE_PRESSED;
+        break;
+    default:
+        data->state = LV_INDEV_STATE_RELEASED;
+        break;
+    }
 }
 
 bool display_touch_pop_gesture(void)

@@ -20,6 +20,7 @@ typedef enum {
     MOTOR_MODE_COARSE_WEAK_DETENTS,           /* 粗略弱制动 0-31 */
     MOTOR_MODE_MAGNETIC_DETENTS,              /* 磁性制动 */
     MOTOR_MODE_RETURN_CENTER_WITH_DETENTS,    /* 回中带制动 */
+    MOTOR_MODE_UNBOUNDED_DETENTS,             /* 无边界棘轮(列表浏览: 无限转+档位感) */
     MOTOR_MODE_COUNT,
 } motor_mode_t;
 

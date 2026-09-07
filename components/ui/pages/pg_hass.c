@@ -75,7 +75,7 @@ static void hass_show_control(hass_data_t *d, bool ctrl)
         motor_set_mode(MOTOR_MODE_UNBOUND_NO_DETENTS, 0, 0);
     } else {
         lv_obj_add_flag(d->ctrl_scr, LV_OBJ_FLAG_HIDDEN);
-        motor_set_mode(MOTOR_MODE_COARSE_STRONG_DETENTS, 0, 0);
+        motor_set_mode(MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
     }
 }
 
@@ -243,7 +243,7 @@ static void pg_hass_create(page_t *p)
     lv_obj_align(d->label_last, LV_ALIGN_BOTTOM_MID, 0, -40);
 
     d->timer = lv_timer_create(hass_timer_cb, 50, d);
-    motor_set_mode(MOTOR_MODE_COARSE_STRONG_DETENTS, 0, 0);
+    motor_set_mode(MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
     hass_set_focus(d, 0);
 }
 
@@ -295,7 +295,7 @@ static void pg_hass_on_resume(page_t *p)
 {
     hass_data_t *d = p->data;
     motor_set_mode(d->in_control ? MOTOR_MODE_UNBOUND_NO_DETENTS
-                                 : MOTOR_MODE_COARSE_STRONG_DETENTS, 0, 0);
+                                 : MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
 }
 
 static void pg_hass_on_tick(page_t *p)

@@ -120,6 +120,12 @@ static void pm_anim_done(lv_anim_t *a)
     pm_animating = false;
 }
 
+static void pm_old_parallax_done(lv_anim_t *a)
+{
+    /* 视差页滑出后回位(被新页覆盖时不可见) */
+    lv_obj_set_x((lv_obj_t *)a->var, 0);
+}
+
 static void pm_pop_anim_done(lv_anim_t *a)
 {
     page_t *p = (page_t *)a->user_data;
@@ -163,20 +169,19 @@ void pm_push(page_id_t id)
     if (pm_stack_depth >= PM_MAX_DEPTH) {
         return;
     }
+    page_t *old = pm_stack_depth > 0 ? pm_stack[pm_stack_depth - 1] : NULL;
     page_t *p = pm_create_page(id);
     if (!p) {
         return;
     }
     pm_stack[pm_stack_depth++] = p;
 
-    lv_obj_set_style_opa(p->root, LV_OPA_TRANSP, 0);
-    lv_obj_set_x(p->root, 240);
-
+    /* 视差转场: 新页自右滑入, 旧页向左滑动 1/4 屏宽作纵深 */
     lv_anim_t a;
     lv_anim_init(&a);
     lv_anim_set_var(&a, p->root);
     lv_anim_set_values(&a, 240, 0);
-    lv_anim_set_time(&a, 300);
+    lv_anim_set_time(&a, 320);
     lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
     lv_anim_set_exec_cb(&a, anim_x_cb);
     lv_anim_start(&a);
@@ -185,11 +190,23 @@ void pm_push(page_id_t id)
     lv_anim_init(&a2);
     lv_anim_set_var(&a2, p->root);
     lv_anim_set_values(&a2, 0, LV_OPA_COVER);
-    lv_anim_set_time(&a2, 300);
+    lv_anim_set_time(&a2, 320);
     lv_anim_set_path_cb(&a2, lv_anim_path_ease_out);
     lv_anim_set_exec_cb(&a2, anim_opa_cb);
     lv_anim_set_ready_cb(&a2, pm_anim_done);
     lv_anim_start(&a2);
+
+    if (old) {
+        lv_anim_t a3;
+        lv_anim_init(&a3);
+        lv_anim_set_var(&a3, old->root);
+        lv_anim_set_values(&a3, 0, -60);
+        lv_anim_set_time(&a3, 320);
+        lv_anim_set_path_cb(&a3, lv_anim_path_ease_out);
+        lv_anim_set_exec_cb(&a3, anim_x_cb);
+        lv_anim_set_ready_cb(&a3, pm_old_parallax_done);
+        lv_anim_start(&a3);
+    }
 
     pm_animating = true;
     knob_input_reset();          /* 清除旧输入残留 */
@@ -213,15 +230,17 @@ void pm_pop(void)
     if (pm_animating || pm_stack_depth <= 1) {
         return;
     }
-page_t *p = pm_stack[pm_stack_depth - 1];
+    page_t *p = pm_stack[pm_stack_depth - 1];
     pm_stack_depth--;
     pm_stack[pm_stack_depth] = NULL;
+    page_t *under = pm_stack_depth > 0 ? pm_stack[pm_stack_depth - 1] : NULL;
 
+    /* 视差转场(反向): 顶页滑出, 下层页从 -60 滑回原位 */
     lv_anim_t a;
     lv_anim_init(&a);
     lv_anim_set_var(&a, p->root);
     lv_anim_set_values(&a, 0, 240);
-    lv_anim_set_time(&a, 250);
+    lv_anim_set_time(&a, 260);
     lv_anim_set_path_cb(&a, lv_anim_path_ease_in);
     lv_anim_set_exec_cb(&a, anim_x_cb);
     lv_anim_set_user_data(&a, p);
@@ -231,12 +250,23 @@ page_t *p = pm_stack[pm_stack_depth - 1];
     lv_anim_init(&a2);
     lv_anim_set_var(&a2, p->root);
     lv_anim_set_values(&a2, LV_OPA_COVER, 0);
-    lv_anim_set_time(&a2, 250);
+    lv_anim_set_time(&a2, 260);
     lv_anim_set_path_cb(&a2, lv_anim_path_ease_in);
     lv_anim_set_exec_cb(&a2, anim_opa_cb);
     lv_anim_set_ready_cb(&a2, pm_pop_anim_done);
     lv_anim_set_user_data(&a2, p);
     lv_anim_start(&a2);
+
+    if (under) {
+        lv_anim_t a3;
+        lv_anim_init(&a3);
+        lv_anim_set_var(&a3, under->root);
+        lv_anim_set_values(&a3, -60, 0);
+        lv_anim_set_time(&a3, 260);
+        lv_anim_set_path_cb(&a3, lv_anim_path_ease_out);
+        lv_anim_set_exec_cb(&a3, anim_x_cb);
+        lv_anim_start(&a3);
+    }
 
     pm_animating = true;
     knob_input_reset();          /* 清除旧输入残留 */
@@ -326,19 +356,19 @@ static void status_bar_create(void)
     lv_obj_set_style_text_color(sb_wifi, lv_color_hex(XK_COLOR_FAINT), 0);
     lv_obj_set_style_text_font(sb_wifi, &lv_font_montserrat_14, 0);
     lv_label_set_text(sb_wifi, LV_SYMBOL_WIFI);
-    lv_obj_align(sb_wifi, LV_ALIGN_RIGHT_MID, -82, 0);
+    lv_obj_align(sb_wifi, LV_ALIGN_RIGHT_MID, -90, 0);
 
     sb_ble = lv_label_create(bar);
     lv_obj_set_style_text_color(sb_ble, lv_color_hex(XK_COLOR_FAINT), 0);
     lv_obj_set_style_text_font(sb_ble, &lv_font_montserrat_14, 0);
     lv_label_set_text(sb_ble, LV_SYMBOL_BLUETOOTH);
-    lv_obj_align(sb_ble, LV_ALIGN_RIGHT_MID, -58, 0);
+    lv_obj_align(sb_ble, LV_ALIGN_RIGHT_MID, -66, 0);
 
     sb_mqtt = lv_label_create(bar);
     lv_obj_set_style_text_color(sb_mqtt, lv_color_hex(XK_COLOR_FAINT), 0);
     lv_obj_set_style_text_font(sb_mqtt, &lv_font_montserrat_14, 0);
     lv_label_set_text(sb_mqtt, LV_SYMBOL_UPLOAD);
-    lv_obj_align(sb_mqtt, LV_ALIGN_RIGHT_MID, -34, 0);
+    lv_obj_align(sb_mqtt, LV_ALIGN_RIGHT_MID, -44, 0);
 
     sb_time = lv_label_create(bar);
     lv_obj_set_style_text_color(sb_time, lv_color_hex(XK_COLOR_TEXT), 0);

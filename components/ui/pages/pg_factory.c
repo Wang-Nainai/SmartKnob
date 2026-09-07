@@ -253,7 +253,7 @@ static void pg_factory_create(page_t *p)
     lv_obj_add_flag(d->raw_label, LV_OBJ_FLAG_HIDDEN);
 
     d->timer = lv_timer_create(factory_timer_cb, 500, d);
-    motor_set_mode(MOTOR_MODE_COARSE_STRONG_DETENTS, 0, 0);
+    motor_set_mode(MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
     lv_obj_remove_flag(p->root, LV_OBJ_FLAG_SCROLLABLE);
 }
 
@@ -304,7 +304,7 @@ static void pg_factory_on_tick(page_t *p)
 
 static void pg_factory_on_resume(page_t *p)
 {
-    motor_set_mode(MOTOR_MODE_COARSE_STRONG_DETENTS, 0, 0);
+    motor_set_mode(MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
 }
 
 const page_ops_t pg_factory_ops = {

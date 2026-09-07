@@ -201,7 +201,7 @@ static const char page_html[] =
     "function api(a,v){fetch('/api/set',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},"
     "body:'action='+a+'&value='+encodeURIComponent(v||'')}).then(r=>r.text()).then(t=>msg(t)).catch(()=>{})}"
     "function dot(id,on){document.getElementById(id).className='dot '+(on?'on':'off')}"
-    "const modes=['\u65e0\u8fb9\u754c\u548c\u5236\u52a8','\u6709\u8fb9\u754c\u65e0\u5236\u52a8','\u591a\u5708\u65e0\u5236\u52a8','\u5f00\u5173\u6a21\u5f0f','\u81ea\u52a8\u56de\u4e2d','\u7cbe\u7ec6\u65e0\u5236\u52a8','\u7cbe\u7ec6\u6709\u5236\u52a8','\u7c97\u7565\u5f3a\u5236\u52a8','\u7c97\u7565\u5f31\u5236\u52a8','\u78c1\u6027\u5236\u52a8','\u56de\u4e2d\u5e26\u5236\u52a8'];"
+    "const modes=['\u65e0\u8fb9\u754c\u548c\u5236\u52a8','\u6709\u8fb9\u754c\u65e0\u5236\u52a8','\u591a\u5708\u65e0\u5236\u52a8','\u5f00\u5173\u6a21\u5f0f','\u81ea\u52a8\u56de\u4e2d','\u7cbe\u7ec6\u65e0\u5236\u52a8','\u7cbe\u7ec6\u6709\u5236\u52a8','\u7c97\u7565\u5f3a\u5236\u52a8','\u7c97\u7565\u5f31\u5236\u52a8','\u78c1\u6027\u5236\u52a8','\u56de\u4e2d\u5e26\u5236\u52a8','\u65e0\u8fb9\u754c\u68d8\u8f6e'];"
     "const sel=document.getElementById('mmode');"
     "modes.forEach((m,i)=>{const o=document.createElement('option');o.value=i;o.textContent=(i+1)+'. '+m;sel.appendChild(o)});"
     "function refresh(){fetch('/status').then(r=>r.json()).then(s=>{"
