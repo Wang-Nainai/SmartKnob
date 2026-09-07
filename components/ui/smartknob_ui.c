@@ -316,6 +316,13 @@ static void status_bar_update(void)
     /* 标题 */
     page_t *top = pm_top();
     const char *t = (top && top->title) ? top->title : "";
+    /* 纯英文标题用 14 号(更小更精致), 中文标题用 16 号中文字库 */
+    bool ascii = true;
+    for (const char *c = t; *c; c++) {
+        if ((unsigned char)*c > 127) { ascii = false; break; }
+    }
+    lv_obj_set_style_text_font(sb_title,
+        ascii ? &lv_font_montserrat_14 : &lv_font_msyh_16, 0);
     lv_label_set_text(sb_title, t);
 }
 
@@ -368,7 +375,7 @@ static void status_bar_create(void)
     lv_obj_remove_style_all(icons);
     lv_obj_set_size(icons, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(icons, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_column(icons, 6, 0);
+    lv_obj_set_style_pad_column(icons, 4, 0);
     lv_obj_align(icons, LV_ALIGN_RIGHT_MID, -48, 0);
 
     sb_wifi = lv_label_create(icons);
