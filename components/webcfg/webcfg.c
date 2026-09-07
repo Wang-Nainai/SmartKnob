@@ -527,8 +527,10 @@ void webcfg_start(void)
     cfg.stack_size = 8192;
     cfg.lru_purge_enable = true;
 
-    if (httpd_start(&s_server, &cfg) != ESP_OK) {
-        ESP_LOGE(TAG, "failed to start HTTP server");
+    esp_err_t hs_err = httpd_start(&s_server, &cfg);
+    if (hs_err != ESP_OK) {
+        ESP_LOGE(TAG, "failed to start HTTP server: %s (0x%x)",
+                 esp_err_to_name(hs_err), (unsigned)hs_err);
         portENTER_CRITICAL(&s_mux);
         s_starting = false;
         portEXIT_CRITICAL(&s_mux);

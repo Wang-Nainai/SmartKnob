@@ -152,17 +152,20 @@ static void pg_setting_create(page_t *p)
     d->timeout_min = display_get_screen_timeout() / 60;
     p->title = "\xE8\xAE\xBE\xE7\xBD\xAE";
 
-    static const char *names[2] = {
+    static const char *names[3] = {
         "\xE4\xBA\xAE\xE5\xBA\xA6",                 /* 亮度 */
         "\xE7\x86\x84\xE5\xB1\x8F\xE6\x97\xB6\xE9\x95\xBF", /* 熄屏时长 */
+        "\xE7\xB3\xBB\xE7\xBB\x9F\xE7\x9B\x91\xE6\x8E\xA7", /* 系统监控 */
     };
-    static const char *icons[2] = {
+    static const char *icons[3] = {
         LV_SYMBOL_DOWN,
         LV_SYMBOL_BELL,
+        LV_SYMBOL_SETTINGS,
     };
-    static const char *descs[2] = {
+    static const char *descs[3] = {
         "\xE5\xB1\x8F\xE5\xB9\x95\xE8\x83\x8C\xE5\x85\x89" "\n10 - 100 %",
         "\xE8\x87\xAA\xE5\x8A\xA8\xE7\x86\x84\xE5\xB1\x8F" "\n0 - 30 \xE5\x88\x86\xE9\x92\x9F",
+        "CPU / RAM / \xE4\xBB\xBB\xE5\x8A\xA1\xE8\xA1\xA8",
     };
 
     /* 列表: 独立滚动容器(flex), 编辑视图作为根上浮层, 互不影响 */
@@ -175,7 +178,7 @@ static void pg_setting_create(page_t *p)
     lv_obj_set_flex_align(list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_ver(list, LIST_PAD, 0);
 
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 3; i++) {
         lv_obj_t *row = lv_obj_create(list);
         lv_obj_remove_style_all(row);
         lv_obj_set_size(row, 220, ROW_H);

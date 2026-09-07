@@ -69,7 +69,7 @@ void on_wifi_connected(void)
     wifi_get_ip_str(ip, sizeof(ip));
     ESP_LOGI(TAG, "IP: %s", ip);
     webcfg_set_ip(ip);
-    webcfg_start();
+    /* httpd_start 不在 WiFi 事件任务里调(在该上下文实测会失败), 由主任务启动 */
 }
 
 void on_wifi_disconnected(void)
@@ -156,6 +156,7 @@ void app_main(void)
 #endif
     if (wifi_ok) {
         ESP_LOGI(TAG, "Successfully connected to WiFi");
+        webcfg_start();   /* 主任务里启动管理页, 失败会打印具体错误码 */
     }
     mqtt_ha_init();   /* 幂等; 断网时 esp-mqtt 自动重试, 联网即接上 */
 
