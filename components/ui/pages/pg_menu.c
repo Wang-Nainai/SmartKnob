@@ -119,17 +119,24 @@ static void menu_set_focus(menu_data_t *d, int idx, int dir)
     lv_obj_scroll_to_y(root, (int32_t)nr * ITEM_H - (vh - ITEM_H) / 2, LV_ANIM_ON);
 }
 
-/* 滚动停止后归位到中间副本区间(下越界一退, 上越界一进):
- * 副本间像素相同, ANIM_OFF 跳变无感, 实现"首尾相连" */
+/* 滚动停止后归位到中间副本: 以"首行聚焦居中"的目标 y 为基准带,
+ * 越界一副本平移 COPY_H(像素相同, 无感)。基准带与聚焦目标一致,
+ * 归位一次后必稳定 —— 否则会 501<->1101 来回平移, 同步 SCROLL_END
+ * 无限递归, LVGL 任务栈耗尽 (已踩坑) */
 static void menu_scroll_wrap_cb(lv_event_t *e)
 {
     menu_data_t *d = lv_event_get_user_data(e);
     lv_obj_t *root = lv_event_get_target(e);
+    int32_t vh = lv_obj_get_height(root);
+    if (vh < ITEM_H) {
+        vh = 3 * ITEM_H;
+    }
+    int32_t base = (int32_t)MENU_COUNT * ITEM_H - (vh - ITEM_H) / 2;   /* = 聚焦首行的目标 y */
     int32_t y = lv_obj_get_scroll_y(root);
     int32_t ny = y;
-    if (ny >= 2 * COPY_H - ITEM_H) {
+    if (ny >= base + COPY_H) {
         ny -= COPY_H;
-    } else if (ny < COPY_H) {
+    } else if (ny < base) {
         ny += COPY_H;
     }
     d->cur_row = (int)MENU_COUNT + d->focus;   /* 基准回到中间副本 */
