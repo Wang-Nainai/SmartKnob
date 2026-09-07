@@ -62,7 +62,7 @@ int pm_depth(void);
 #define XK_COLOR_TEXT     0xFFFFFF
 #define XK_COLOR_GRAY     0x999999
 #define XK_COLOR_FAINT    0x555555
-#define XK_COLOR_ACCENT   0x8A7BFF   /* 主题色: 蓝紫 (菜单边/刻度/选中态) */
+#define XK_COLOR_ACCENT   0x2E9BFF   /* 主题色: 蓝 (菜单边/刻度/选中态) */
 #define XK_COLOR_RED      0xFF0000   /* 语义警告: 越界/超限告警专用 */
 #define XK_COLOR_GREEN    0x00C800
 #define XK_COLOR_BLUE     0x3399FF

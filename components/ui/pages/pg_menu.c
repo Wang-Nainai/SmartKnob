@@ -133,6 +133,8 @@ static void pg_menu_create(page_t *p)
     lv_obj_set_flex_flow(p->root, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(p->root, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_ver(p->root, ITEM_PAD, 0);
+    /* 滚动条会闪现在右缘, 视觉上像边框线跳到右下角, 直接关掉 */
+    lv_obj_set_scrollbar_mode(p->root, LV_SCROLLBAR_MODE_OFF);
 
     for (int i = 0; i < (int)MENU_COUNT; i++) {
         /* 行容器 */
