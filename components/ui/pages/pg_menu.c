@@ -56,6 +56,7 @@ static const menu_item_t items[] = {
 
 typedef struct {
     int focus;
+    int cur_row;   /* 上次聚焦动画所居中的行(沿旋转方向连贯滚动用) */
     lv_obj_t *rows[ROWS_N];
     lv_obj_t *icons[ROWS_N];
     lv_obj_t *infos[ROWS_N];
@@ -77,17 +78,18 @@ static void menu_anim_width(lv_obj_t *icon, int32_t target)
     lv_anim_start(&a);
 }
 
-static void menu_set_focus(menu_data_t *d, int idx)
+static void menu_set_focus(menu_data_t *d, int idx, int dir)
 {
-    if (idx < 0 || idx >= (int)MENU_COUNT) {
+    int n = (int)MENU_COUNT;
+    if (idx < 0 || idx >= n) {
         return;
     }
     d->focus = idx;
-    for (int k = 0; k < (int)MENU_COUNT; k++) {
+    for (int k = 0; k < n; k++) {
         bool f = (k == idx);
         /* 三份副本同步(副本像素一致, 循环跳变才无感) */
         for (int c = 0; c < COPY_N; c++) {
-            int r = c * (int)MENU_COUNT + k;
+            int r = c * n + k;
             /* 显式宽度动画: 同图标重复动画自动替换, 快速旋转安全 */
             menu_anim_width(d->icons[r], f ? ICON_W_FOCUS : ICON_W_OPEN);
             /* 主题色边: 仅聚焦行, 显式设置(不用状态样式) */
@@ -100,29 +102,37 @@ static void menu_set_focus(menu_data_t *d, int idx)
             }
         }
     }
-    /* 滚动跟随焦点: 聚焦行竖直居中(指向中间副本) */
-    lv_obj_t *row = d->rows[MENU_COUNT + idx];
-    lv_obj_t *root = lv_obj_get_parent(row);
+    /* 目标行: 沿旋转方向取相邻副本 —— 系统→S-Dial 也继续向下滚 100px,
+     * 全程连贯 (而不是回卷 600px 跳回顶部); 动画结束后由 wrap 归位 */
+    int nr = d->cur_row + dir;
+    if (dir == 0 || nr < 0 || nr >= ROWS_N || (nr % n) != idx) {
+        nr = n + idx;
+    }
+    d->cur_row = nr;
+    lv_obj_t *root = lv_obj_get_parent(d->rows[nr]);
     lv_obj_update_layout(root);
     int32_t vh = lv_obj_get_height(root);
     if (vh < ITEM_H) {
         vh = 3 * ITEM_H;   /* 布局未就绪兜底 */
     }
-    lv_obj_scroll_to_y(root, lv_obj_get_y(row) - (vh - ITEM_H) / 2, LV_ANIM_ON);
+    /* 无内外边距: 行顶 = nr*ITEM_H, 聚焦行竖直居中 */
+    lv_obj_scroll_to_y(root, (int32_t)nr * ITEM_H - (vh - ITEM_H) / 2, LV_ANIM_ON);
 }
 
-/* 滚动停止后归位到中间副本区间(上下各留一整份余量):
+/* 滚动停止后归位到中间副本区间(下越界一退, 上越界一进):
  * 副本间像素相同, ANIM_OFF 跳变无感, 实现"首尾相连" */
 static void menu_scroll_wrap_cb(lv_event_t *e)
 {
+    menu_data_t *d = lv_event_get_user_data(e);
     lv_obj_t *root = lv_event_get_target(e);
     int32_t y = lv_obj_get_scroll_y(root);
     int32_t ny = y;
-    if (ny < COPY_H) {
-        ny += COPY_H;
-    } else if (ny >= 2 * COPY_H) {
+    if (ny >= 2 * COPY_H - ITEM_H) {
         ny -= COPY_H;
+    } else if (ny < COPY_H) {
+        ny += COPY_H;
     }
+    d->cur_row = (int)MENU_COUNT + d->focus;   /* 基准回到中间副本 */
     if (ny != y) {
         lv_obj_scroll_to_y(root, ny, LV_ANIM_OFF);
     }
@@ -164,7 +174,7 @@ static void pg_menu_create(page_t *p)
     lv_obj_set_flex_align(p->root, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER);
     /* 无上下外边距: 18 行纯周期排列, 循环跳变才能像素级无缝 */
     lv_obj_set_scrollbar_mode(p->root, LV_SCROLLBAR_MODE_OFF);
-    lv_obj_add_event_cb(p->root, menu_scroll_wrap_cb, LV_EVENT_SCROLL_END, NULL);
+    lv_obj_add_event_cb(p->root, menu_scroll_wrap_cb, LV_EVENT_SCROLL_END, d);
 
     for (int i = 0; i < ROWS_N; i++) {
         const menu_item_t *it = &items[i % (int)MENU_COUNT];
@@ -183,6 +193,9 @@ static void pg_menu_create(page_t *p)
         lv_obj_t *icon = lv_obj_create(row);
         lv_obj_remove_style_all(icon);
         lv_obj_set_size(icon, ICON_W_OPEN, ITEM_H);
+        /* 关键: 图标默认 CLICKABLE 且铺满整行置顶, 会吃掉所有点按
+         * → 行收不到 CLICKED, 点选失效; 必须关闭让点击穿透到行 */
+        lv_obj_clear_flag(icon, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_style_align(icon, LV_ALIGN_LEFT_MID, 0);
         lv_obj_clear_flag(icon, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_flex_flow(icon, LV_FLEX_FLOW_COLUMN);
@@ -215,7 +228,7 @@ static void pg_menu_create(page_t *p)
         lv_obj_move_foreground(icon);
     }
 
-    menu_set_focus(d, 0);
+    menu_set_focus(d, 0, 0);
     motor_set_mode(MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
 }
 
@@ -230,11 +243,8 @@ static void pg_menu_on_rotate(page_t *p, int32_t steps)
     menu_data_t *d = p->data;
     int n = (int)MENU_COUNT;
     /* 无级循环: 1-2-3-4-5-6-1-2-3 连续旋转 */
-    d->focus = (d->focus + steps) % n;
-    if (d->focus < 0) {
-        d->focus += n;
-    }
-    menu_set_focus(d, d->focus);
+    d->focus = ((d->focus + steps) % n + n) % n;
+    menu_set_focus(d, d->focus, (int)steps);
 }
 
 static void pg_menu_on_back(page_t *p)
@@ -247,7 +257,7 @@ static void pg_menu_on_resume(page_t *p)
     /* 从子页返回: 恢复菜单浏览手感 + 滚动回焦点行 */
     menu_data_t *d = p->data;
     motor_set_mode(MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
-    menu_set_focus(d, d->focus);
+    menu_set_focus(d, d->focus, 0);
 }
 
 static void pg_menu_on_tick(page_t *p)
