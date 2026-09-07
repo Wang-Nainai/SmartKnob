@@ -201,20 +201,18 @@ static void pg_hass_create(page_t *p)
     d->scale = scale;
     lv_obj_set_pos(scale, 0, 50);
     lv_obj_set_size(scale, 240, 240);
-    lv_obj_set_style_bg_color(scale, lv_color_hex(XK_COLOR_BG), 0);
-    lv_obj_set_style_bg_grad_color(scale, lv_color_make(64, 0, 64), 0);
-    lv_obj_set_style_bg_grad_dir(scale, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_bg_color(scale, lv_color_hex(XK_COLOR_PANEL), 0);
     lv_obj_set_style_radius(scale, LV_RADIUS_CIRCLE, 0);
     lv_scale_set_mode(scale, LV_SCALE_MODE_ROUND_INNER);
     lv_scale_set_label_show(scale, false);
-    lv_obj_set_style_length(scale, 6, LV_PART_ITEMS);
-    lv_obj_set_style_line_width(scale, 2, LV_PART_ITEMS);
-    lv_obj_set_style_line_color(scale, lv_color_hex(XK_COLOR_RED), LV_PART_ITEMS);
-    lv_obj_set_style_length(scale, 14, LV_PART_INDICATOR);
-    lv_obj_set_style_line_width(scale, 3, LV_PART_INDICATOR);
+    lv_obj_set_style_length(scale, 5, LV_PART_ITEMS);
+    lv_obj_set_style_line_width(scale, 1, LV_PART_ITEMS);
+    lv_obj_set_style_line_color(scale, lv_color_hex(0x4A4A4A), LV_PART_ITEMS);
+    lv_obj_set_style_length(scale, 12, LV_PART_INDICATOR);
+    lv_obj_set_style_line_width(scale, 2, LV_PART_INDICATOR);
     lv_obj_set_style_line_color(scale, lv_color_hex(XK_COLOR_RED), LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(scale, lv_color_hex(XK_COLOR_RED), LV_PART_MAIN);
-    lv_obj_set_style_arc_width(scale, 2, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(scale, lv_color_hex(0x3A3A3A), LV_PART_MAIN);
+    lv_obj_set_style_arc_width(scale, 1, LV_PART_MAIN);
     lv_scale_set_total_tick_count(scale, 73);
     lv_scale_set_major_tick_every(scale, 1);
     lv_scale_set_range(scale, 0, 72);
@@ -234,7 +232,7 @@ static void pg_hass_create(page_t *p)
 
     d->label_name = lv_label_create(d->ctrl_scr);
     lv_obj_set_style_text_color(d->label_name, lv_color_hex(XK_COLOR_TEXT), 0);
-    lv_obj_set_style_text_font(d->label_name, &lv_font_montserrat_26, 0);
+    lv_obj_set_style_text_font(d->label_name, &lv_font_msyh_16, 0);
     lv_obj_align(d->label_name, LV_ALIGN_TOP_MID, 0, 40);
 
     d->label_last = lv_label_create(d->ctrl_scr);

@@ -146,24 +146,22 @@ static void pg_playground_create(page_t *p)
     d->scale = lv_scale_create(p->root);
     lv_obj_set_pos(d->scale, 0, 50);
     lv_obj_set_size(d->scale, 240, 240);
-    lv_obj_set_style_bg_color(d->scale, lv_color_hex(XK_COLOR_BG), 0);
-    lv_obj_set_style_bg_grad_color(d->scale, lv_color_make(64, 0, 64), 0);
-    lv_obj_set_style_bg_grad_dir(d->scale, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_bg_color(d->scale, lv_color_hex(XK_COLOR_PANEL), 0);
     lv_obj_set_style_radius(d->scale, LV_RADIUS_CIRCLE, 0);
     lv_scale_set_mode(d->scale, LV_SCALE_MODE_ROUND_INNER);
     lv_scale_set_label_show(d->scale, false);
 
-    /* minor ticks: red */
-    lv_obj_set_style_length(d->scale, 6, LV_PART_ITEMS);
-    lv_obj_set_style_line_width(d->scale, 2, LV_PART_ITEMS);
-    lv_obj_set_style_line_color(d->scale, lv_color_hex(XK_COLOR_RED), LV_PART_ITEMS);
-    /* major ticks: red, longer */
-    lv_obj_set_style_length(d->scale, 14, LV_PART_INDICATOR);
-    lv_obj_set_style_line_width(d->scale, 3, LV_PART_INDICATOR);
+    /* 次刻度: 暗灰细线(背景感) */
+    lv_obj_set_style_length(d->scale, 5, LV_PART_ITEMS);
+    lv_obj_set_style_line_width(d->scale, 1, LV_PART_ITEMS);
+    lv_obj_set_style_line_color(d->scale, lv_color_hex(0x4A4A4A), LV_PART_ITEMS);
+    /* 主刻度: 红色加长(X-Knob 识别符号) */
+    lv_obj_set_style_length(d->scale, 12, LV_PART_INDICATOR);
+    lv_obj_set_style_line_width(d->scale, 2, LV_PART_INDICATOR);
     lv_obj_set_style_line_color(d->scale, lv_color_hex(XK_COLOR_RED), LV_PART_INDICATOR);
-    /* main arc */
-    lv_obj_set_style_arc_color(d->scale, lv_color_hex(XK_COLOR_RED), LV_PART_MAIN);
-    lv_obj_set_style_arc_width(d->scale, 2, LV_PART_MAIN);
+    /* 外环: 极细暗灰 */
+    lv_obj_set_style_arc_color(d->scale, lv_color_hex(0x3A3A3A), LV_PART_MAIN);
+    lv_obj_set_style_arc_width(d->scale, 1, LV_PART_MAIN);
 
     lv_scale_set_total_tick_count(d->scale, 41);
     lv_scale_set_major_tick_every(d->scale, 1);

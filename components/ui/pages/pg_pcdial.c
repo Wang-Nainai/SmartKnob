@@ -195,7 +195,8 @@ static void pg_pcdial_create(page_t *p)
     lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -8);
 
     lv_obj_remove_flag(p->root, LV_OBJ_FLAG_SCROLLABLE);
-    motor_set_mode(MOTOR_MODE_UNBOUND_NO_DETENTS, 0, 0);
+    /* 棘轮手感: 旋转一格一咔哒(齿轮感), 一格=一次音量/滚轮动作 */
+    motor_set_mode(MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
 }
 
 static void pg_pcdial_destroy(page_t *p)

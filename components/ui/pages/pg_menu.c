@@ -122,7 +122,7 @@ static void pg_menu_create(page_t *p)
         /* 宽度过渡动画 (X-Knob: overshoot 200ms) */
         static lv_style_transition_dsc_t trans;
         static const lv_style_prop_t props[] = { LV_STYLE_WIDTH, LV_STYLE_PROP_INV };
-        lv_style_transition_dsc_init(&trans, props, lv_anim_path_overshoot, 200, 0, NULL);
+        lv_style_transition_dsc_init(&trans, props, lv_anim_path_ease_out, 120, 0, NULL);
         lv_obj_set_style_transition(icon, &trans, LV_STATE_FOCUSED);
         lv_obj_set_style_transition(icon, &trans, 0);
 
