@@ -83,8 +83,7 @@ static const uint8_t report_ref_consumer[2] = { 0x01, 0x01 };
 static const uint8_t report_ref_mouse[2]    = { 0x02, 0x01 };
 /* HID Information: bcdHID=1.1, country=0, flags=normally connectable */
 static const uint8_t hid_info_val[4] = { 0x01, 0x01, 0x00, 0x02 };
-static const uint8_t proto_mode_val = 0x01;   /* Report 协议 */
-static const uint8_t battery_val = 100;
+static uint8_t proto_mode_val = 0x01;         /* 当前协议: 1=report, 0=boot(主机可写切换) */static const uint8_t battery_val = 100;
 /* PnP ID: Win/BLE HID 类驱动强制要求, 缺失则配对成功也不创建 HID 设备
  * {来源=USB-IF, VID=0x303A(Espressif), PID=0x4004, 版本=1.0} */
 static const uint8_t pnp_id_val[7] = { 0x02, 0x3A, 0x30, 0x04, 0x40, 0x00, 0x01 };
@@ -108,7 +107,20 @@ static int proto_mode_cb(uint16_t conn, uint16_t attr, struct ble_gatt_access_ct
     if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
         return os_mbuf_append(ctxt->om, &proto_mode_val, 1);
     }
-    return 0;   /* write: 忽略内容(仅支持 Report 协议) */
+    /* 写入 = 主机切换协议: 0=boot, 1=report。
+     * boot 模式下 mouse 报文必须是 3 字节裸格式(无 Report ID),
+     * consumer 无 boot 格式(静默不发), 否则主机按 boot 格式解析 report 报文 = 乱点 */
+    uint16_t wlen = OS_MBUF_PKTLEN(ctxt->om);
+    uint8_t mode = proto_mode_val;
+    if (wlen == 1) {
+        mode = ctxt->om->om_data[0];
+    }
+    if (mode != proto_mode_val) {
+        ESP_LOGW(TAG, "protocol mode switch: %u -> %u (%s)", proto_mode_val, mode,
+                 mode == 0 ? "BOOT" : "report");
+        proto_mode_val = mode;
+    }
+    return 0;
 }
 
 static int report_read_cb(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg)
@@ -380,8 +392,8 @@ void blehid_unpair_all(void)
 
 void blehid_consumer_send(uint16_t usage)
 {
-    if (!s_connected) {
-        return;
+    if (!s_connected || proto_mode_val == 0) {
+        return;   /* boot 协议无 consumer 格式 */
     }
     uint8_t press[3] = { 0x01, (uint8_t)(usage & 0xFF), (uint8_t)(usage >> 8) };
     uint8_t release[3] = { 0x01, 0x00, 0x00 };
@@ -392,12 +404,21 @@ void blehid_consumer_send(uint16_t usage)
 
 void blehid_mouse_scroll(int8_t wheel)
 {
+    if (proto_mode_val == 0) {
+        /* boot 协议 3 字节鼠标无滚轮字段, 只能发 0 移动保持连接活性无意义, 跳过 */
+        return;
+    }
     uint8_t report[5] = { 0x02, 0x00, 0x00, 0x00, (uint8_t)wheel };
     notify(h_mouse_report, report, 5);
 }
 
 void blehid_mouse_move(int8_t dx, int8_t dy)
 {
+    if (proto_mode_val == 0) {
+        uint8_t boot[3] = { 0x00, (uint8_t)dx, (uint8_t)dy };   /* boot: {buttons,dx,dy} */
+        notify(h_mouse_report, boot, 3);
+        return;
+    }
     uint8_t report[5] = { 0x02, 0x00, (uint8_t)dx, (uint8_t)dy, 0x00 };
     notify(h_mouse_report, report, 5);
 }
