@@ -23,7 +23,9 @@
 static const char *TAG = "display";
 
 #define LCD_HOST          SPI2_HOST
-#define LCD_PIXEL_CLOCK_HZ (40 * 1000 * 1000)   /* 40MHz; 若面包板接线花屏, 改回 20 */
+#define LCD_PIXEL_CLOCK_HZ (80 * 1000 * 1000)   /* 80MHz: 整帧传输 15.4ms -> ~65fps
+                                                 * (40MHz 整帧 31ms 卡在 32fps, 动画必卡顿)
+                                                 * 若出现花屏/雪花, 降到 62.5MHz */
 #define LCD_H_RES          240
 #define LCD_V_RES          320
 #define LCD_CMD_BITS       8
@@ -38,12 +40,12 @@ static const char *TAG = "display";
 #define PIN_NUM_LCD_BL     21
 #define PIN_NUM_TOUCH_CS   14
 
-#define LVGL_DRAW_BUF_LINES    30   /* 40->30: 省 9.6KB 内部 RAM, 刷新影响可忽略 */
+#define LVGL_DRAW_BUF_LINES    60   /* 30->60: 减少整帧冲刷次数 11->6 次(双缓冲共 57.6KB DMA 内存) */
 #define LVGL_TICK_PERIOD_MS    2
 #define LVGL_TASK_MAX_DELAY_MS 500
 #define LVGL_TASK_MIN_DELAY_MS 5
 #define LVGL_TASK_STACK_SIZE   (10 * 1024)
-#define LVGL_TASK_PRIORITY     3   /* 高于后台任务, 动画更顺滑 */
+#define LVGL_TASK_PRIORITY     8   /* 高于 mqtt/httpd 等应用任务, 低于 WiFi/BLE 内部任务, 动画少被打断 */
 #define LVGL_TASK_CORE         0   /* motor 独占 core1, LVGL 固定 core0 */
 
 static _lock_t lvgl_api_lock;
