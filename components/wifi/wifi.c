@@ -127,6 +127,9 @@ void wifi_init(void)
 
     wifi_apply_config();
     ESP_ERROR_CHECK(esp_wifi_start());
+    /* 关闭 modem 省电: 默认省电模式下入站 TCP(SYN)常被漏收,
+     * 导致 Web 管理页打不开/响应迟钝; 旋钮设备功耗不敏感 */
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
 }
 
 void wifi_reconnect_with_config(void)

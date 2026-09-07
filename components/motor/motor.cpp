@@ -351,6 +351,10 @@ static void start_shake(int strength, int delay_ms)
     if (shake_active) {
         return;   /* 正在抖或已排队, 去重 */
     }
+    /* 用户正在快转时不叠加振动, 避免对抗手感 */
+    if (fabsf(motor.shaft_velocity) > 15.0f) {
+        return;
+    }
     motor.move((float)strength);   /* 先施加正脉冲 */
     shake_active = true;
     shake_state = SHAKE_POS;

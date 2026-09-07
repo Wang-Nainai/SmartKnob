@@ -19,6 +19,12 @@
 
 static const char *TAG = "SmartKnob";
 
+static void sntp_sync_cb(struct timeval *tv)
+{
+    (void)tv;
+    ESP_LOGI(TAG, "SNTP time synced");
+}
+
 static void init_sntp(void)
 {
     setenv("TZ", "CST-8", 1);
@@ -27,7 +33,8 @@ static void init_sntp(void)
     esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
     esp_sntp_setservername(0, "ntp.aliyun.com");
     esp_sntp_setservername(1, "cn.pool.ntp.org");
-    esp_sntp_setservername(2, "pool.ntp.org");
+    esp_sntp_set_time_sync_notification_cb(sntp_sync_cb);
+    esp_sntp_set_sync_interval(10 * 60 * 1000);   /* 10 分钟 */
     esp_sntp_init();
     ESP_LOGI(TAG, "SNTP initialized");
 }

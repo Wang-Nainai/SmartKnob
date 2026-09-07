@@ -26,7 +26,10 @@ config TOUCH_Y_MAX
 
 config TOUCH_SWAP_XY
     bool "Swap touch X/Y axes"
-    default n
+    default y
+    help
+        实测该面板(店家 XPT2406)原始轴与屏幕轴互换, 默认开启。
+        若四角对照发现反了再关闭。
 
 config TOUCH_MIRROR_X
     bool "Mirror touch X axis"

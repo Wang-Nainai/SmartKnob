@@ -42,7 +42,11 @@ def collect_chars():
                 i += 1
         return out.decode("utf-8", errors="replace")
 
-    files = glob.glob(os.path.join(PAGES_DIR, "*.c")) + [UI_MAIN]
+    files = glob.glob(os.path.join(PAGES_DIR, "*.c")) + [
+        UI_MAIN,
+        # 电机模式名等动态文案的源头也要纳入字库
+        os.path.join(ROOT, "components", "motor", "motor.cpp"),
+    ]
     for p in files:
         s = io.open(p, encoding="utf-8").read()
         for m in re.finditer(r'"((?:[^"\\]|\\.)*)"', s):

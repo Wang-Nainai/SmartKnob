@@ -87,7 +87,7 @@ page_t *pm_top(void)
 void pm_shake(void)
 {
 #if CONFIG_MOTOR_ENABLE
-    motor_shake(2, 25);
+    motor_shake(1, 15);   /* 轻磕: (2,25) 实测过猛 */
 #endif
 }
 
@@ -317,7 +317,10 @@ static void status_bar_create(void)
     lv_obj_set_style_text_color(sb_title, lv_color_hex(XK_COLOR_TEXT), 0);
     lv_obj_set_style_text_font(sb_title, &lv_font_msyh_16, 0);
     lv_label_set_text(sb_title, "");
-    lv_obj_align(sb_title, LV_ALIGN_CENTER, 0, 0);
+    /* 左对齐+限宽: 避免长标题(如 SmartKnob)与右侧 WiFi/BLE/MQTT 图标重叠 */
+    lv_obj_set_width(sb_title, 100);
+    lv_label_set_long_mode(sb_title, LV_LABEL_LONG_DOT);
+    lv_obj_align(sb_title, LV_ALIGN_LEFT_MID, 30, 0);
 
     sb_wifi = lv_label_create(bar);
     lv_obj_set_style_text_color(sb_wifi, lv_color_hex(XK_COLOR_FAINT), 0);
