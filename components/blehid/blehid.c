@@ -245,9 +245,17 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_MTU:
         ESP_LOGI(TAG, "MTU: %d", event->mtu.value);
         return 0;
-    case BLE_GAP_EVENT_REPEAT_PAIRING:
-        ESP_LOGI(TAG, "REPEAT_PAIRING: 删除旧绑定并重新配对");
+    case BLE_GAP_EVENT_REPEAT_PAIRING: {
+        /* 已持有该设备的旧绑定: 必须先删除旧绑定再继续配对。
+         * 只返回 RETRY 而不删除会造成无限 REPEAT_PAIRING 风暴
+         * (配对->撞旧绑定->再配对, 几 ms 一次, 刷死 nimble_host 并触发 WDT) */
+        struct ble_gap_conn_desc desc;
+        ESP_LOGI(TAG, "REPEAT_PAIRING: delete stale bond, retry pairing");
+        if (ble_gap_conn_find(event->repeat_pairing.conn_handle, &desc) == 0) {
+            ble_store_util_delete_peer(&desc.peer_id_addr);
+        }
         return BLE_GAP_REPEAT_PAIRING_RETRY;
+    }
     case BLE_GAP_EVENT_ADV_COMPLETE:
         adv_start();
         return 0;
