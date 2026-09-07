@@ -249,16 +249,33 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_ENC_CHANGE:
         ESP_LOGI(TAG, "ENC_CHANGE: status=%d", event->enc_change.status);
         return 0;
+    case BLE_GAP_EVENT_NOTIFY_TX: {
+        /* 链路层确认探针: status=0 表示该通知已被对端 LL ACK(真正到达主机);
+         * 非 0 / BLE_HS_EDONE 说明传输未完成(没到对端) */
+        static int s_tx_log_cnt = 0;
+        if (s_tx_log_cnt < 20) {
+            s_tx_log_cnt++;
+            ESP_LOGI(TAG, "NOTIFY_TX: status=%d handle=%d",
+                     event->notify_tx.status, event->notify_tx.attr_handle);
+        }
+        return 0;
+    }
     case BLE_GAP_EVENT_SUBSCRIBE: {
         const char *what = "OTHER";
         if (event->subscribe.attr_handle == h_consumer_report + 1) {
             what = "CONSUMER_CCCD";
         } else if (event->subscribe.attr_handle == h_mouse_report + 1) {
             what = "MOUSE_CCCD";
+        } else if (event->subscribe.attr_handle == h_consumer_report) {
+            what = "CONSUMER(val)";
+        } else if (event->subscribe.attr_handle == h_mouse_report) {
+            what = "MOUSE(val)";
         }
-        ESP_LOGI(TAG, "SUBSCRIBE: %s handle=%d cur=%d prev=%d reason=%d",
+        static const char *reasons[] = { "?", "WRITE", "TERM", "RESTORE" };
+        int r = event->subscribe.reason;
+        ESP_LOGI(TAG, "SUBSCRIBE: %s handle=%d cur=%d prev=%d reason=%s",
                  what, event->subscribe.attr_handle, event->subscribe.cur_notify,
-                 event->subscribe.prev_notify, event->subscribe.reason);
+                 event->subscribe.prev_notify, reasons[r < 1 || r > 3 ? 0 : r - 1]);
         return 0;
     }
     case BLE_GAP_EVENT_MTU:
