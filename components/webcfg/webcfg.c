@@ -175,8 +175,24 @@ static const char page_html[] =
     "<h2>蓝牙 HID · 电脑控制</h2>"
     "<div class=\"card\">"
     "<div style=\"font-size:13px\" id=\"ble_txt\">-</div>"
+    "<div class=\"row\" style=\"margin-top:10px\">"
+    "<button onclick=\"api('hid','vol_up')\">音量 +</button>"
+    "<button onclick=\"api('hid','vol_dn')\">音量 −</button>"
+    "</div>"
+    "<div class=\"row\">"
+    "<button class=\"sec\" onclick=\"api('hid','mute')\">静音</button>"
+    "<button class=\"sec\" onclick=\"api('hid','play')\">播放 / 暂停</button>"
+    "</div>"
+    "<div class=\"row\">"
+    "<button class=\"sec\" onclick=\"api('hid','next')\">下一首</button>"
+    "<button class=\"sec\" onclick=\"api('hid','prev')\">上一首</button>"
+    "</div>"
+    "<div class=\"row\">"
+    "<button class=\"sec\" onclick=\"api('hid','scr_up')\">滚轮 ↑</button>"
+    "<button class=\"sec\" onclick=\"api('hid','scr_dn')\">滚轮 ↓</button>"
+    "</div>"
     "<button class=\"sec\" style=\"margin-top:10px\" onclick=\"api('ble_disc')\">断开并重新广播</button>"
-    "<div class=\"tip\">电脑蓝牙搜索 \"SmartKnob\" 配对后, S-Dial 页可控制音量/滚轮/媒体</div></div>"
+    "<div class=\"tip\">电脑蓝牙搜索 \"SmartKnob\" 配对后, S-Dial 页与本页均可控制音量/滚轮/媒体</div></div>"
     "<h2>网络 与 MQTT</h2>"
     "<div class=\"card\">"
     "<form method=\"post\" action=\"/save\" onsubmit=\"save(event)\">"
@@ -366,6 +382,37 @@ static esp_err_t handler_api_set(httpd_req_t *req)
     } else if (!strcmp(action, "ble_disc")) {
         blehid_disconnect();
         msg = "BLE HID disconnecting";
+    } else if (!strcmp(action, "hid")) {
+        /* 网页遥控电脑: 通过 BLE HID 转发消费控制/滚轮 */
+        if (!blehid_is_connected()) {
+            msg = "BLE HID not connected";
+        } else if (!strcmp(value, "vol_up")) {
+            blehid_consumer_send(HID_CONSUMER_VOLUME_UP);
+            msg = "volume up";
+        } else if (!strcmp(value, "vol_dn")) {
+            blehid_consumer_send(HID_CONSUMER_VOLUME_DOWN);
+            msg = "volume down";
+        } else if (!strcmp(value, "mute")) {
+            blehid_consumer_send(HID_CONSUMER_MUTE);
+            msg = "mute toggle";
+        } else if (!strcmp(value, "play")) {
+            blehid_consumer_send(HID_CONSUMER_PLAY_PAUSE);
+            msg = "play/pause";
+        } else if (!strcmp(value, "next")) {
+            blehid_consumer_send(HID_CONSUMER_SCAN_NEXT);
+            msg = "next track";
+        } else if (!strcmp(value, "prev")) {
+            blehid_consumer_send(HID_CONSUMER_SCAN_PREV);
+            msg = "prev track";
+        } else if (!strcmp(value, "scr_up")) {
+            blehid_mouse_scroll(2);
+            msg = "scroll up";
+        } else if (!strcmp(value, "scr_dn")) {
+            blehid_mouse_scroll(-2);
+            msg = "scroll down";
+        } else {
+            msg = "unknown hid cmd";
+        }
     } else {
         msg = "unknown action";
     }
