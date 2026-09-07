@@ -45,6 +45,10 @@ static void event_handler(void *arg, esp_event_base_t base, int32_t id, void *da
         ESP_LOGI(TAG, "connected, IP: " IPSTR, IP2STR(&s_ip_addr));
         s_retry_num = 0;
         app_state_set_wifi(true);
+        /* 关联完成后再强制一次: 省电模式会让 AP 缓存/丢弃入站流量,
+         * 导致 Web 管理页打不开、UDP 应答丢失 */
+        esp_err_t ps_rc = esp_wifi_set_ps(WIFI_PS_NONE);
+        ESP_LOGI(TAG, "wifi ps off rc=%d", ps_rc);
         xEventGroupSetBits(s_wifi_event, WIFI_CONNECTED_BIT);
         if (s_ap_active) {
             wifi_ap_fallback_stop();   /* 配网成功: 自动关闭热点 */

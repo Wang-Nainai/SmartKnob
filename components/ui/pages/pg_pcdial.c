@@ -154,19 +154,19 @@ static void pg_pcdial_create(page_t *p)
 
     d->label_ble = lv_label_create(p->root);
     lv_obj_set_style_text_font(d->label_ble, &lv_font_msyh_16, 0);
-    lv_obj_align(d->label_ble, LV_ALIGN_TOP_MID, 0, 34);
+    lv_obj_align(d->label_ble, LV_ALIGN_TOP_MID, 0, 30);
     pc_ble_status_refresh(d);
 
-    d->btn_mode = pc_button_create(p->root, 50, 66, 140, 40,
+    d->btn_mode = pc_button_create(p->root, 50, 56, 140, 36,
                                    "", pc_mode_btn_cb, p);
     d->label_mode = lv_obj_get_child(d->btn_mode, 0);
     pc_mode_refresh(d);
 
-    /* 中间播放区 */
+    /* 中间播放区 (116px, 不遮挡上下文字) */
     d->btn_play = lv_obj_create(p->root);
     lv_obj_remove_style_all(d->btn_play);
-    lv_obj_set_size(d->btn_play, 140, 140);
-    lv_obj_align(d->btn_play, LV_ALIGN_CENTER, 0, -10);
+    lv_obj_set_size(d->btn_play, 116, 116);
+    lv_obj_align(d->btn_play, LV_ALIGN_CENTER, 0, 18);
     lv_obj_set_style_bg_color(d->btn_play, lv_color_hex(XK_COLOR_PANEL), 0);
     lv_obj_set_style_bg_opa(d->btn_play, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(d->btn_play, LV_RADIUS_CIRCLE, 0);
@@ -182,10 +182,10 @@ static void pg_pcdial_create(page_t *p)
     lv_obj_center(d->label_play);
 
     /* 上一首 / 下一首 */
-    d->btn_prev = pc_button_create(p->root, 10, 260, 105, 40,
-                                   LV_SYMBOL_PREV" \xE4\xB8\x8A\xE9\xA6\x96", pc_prev_cb, p);
-    d->btn_next = pc_button_create(p->root, 125, 260, 105, 40,
-                                   "\xE4\xB8\x8B\xE9\xA6\x96 "LV_SYMBOL_NEXT, pc_next_cb, p);
+    d->btn_prev = pc_button_create(p->root, 10, 246, 105, 40,
+                                   "\xE4\xB8\x8A\xE4\xB8\x80\xE9\xA6\x96", pc_prev_cb, p);
+    d->btn_next = pc_button_create(p->root, 125, 246, 105, 40,
+                                   "\xE4\xB8\x8B\xE4\xB8\x80\xE9\xA6\x96", pc_next_cb, p);
 
     /* 配对提示 */
     lv_obj_t *hint = lv_label_create(p->root);

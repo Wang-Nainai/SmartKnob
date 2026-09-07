@@ -197,6 +197,8 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
 {
     switch (event->type) {
     case BLE_GAP_EVENT_CONNECT:
+        ESP_LOGI(TAG, "CONNECT: status=%d handle=%d", event->connect.status,
+                 event->connect.conn_handle);
         if (event->connect.status == 0) {
             s_connected = true;
             s_conn_handle = event->connect.conn_handle;
@@ -208,9 +210,24 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_DISCONNECT:
         s_connected = false;
         s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
-        ESP_LOGI(TAG, "PC disconnected, reason=%d, advertising", event->disconnect.reason);
+        ESP_LOGW(TAG, "DISCONNECT: reason=0x%02X (0x13=远端主动断开, 0x3E=配对/链路建立失败, "
+                      "0x16=加密失败, 0x08=超时)", event->disconnect.reason);
         adv_start();
         return 0;
+    case BLE_GAP_EVENT_ENC_CHANGE:
+        ESP_LOGI(TAG, "ENC_CHANGE: status=%d", event->enc_change.status);
+        return 0;
+    case BLE_GAP_EVENT_SUBSCRIBE:
+        ESP_LOGI(TAG, "SUBSCRIBE: handle=%d cur=%d prev=%d reason=%d",
+                 event->subscribe.attr_handle, event->subscribe.cur_notify,
+                 event->subscribe.prev_notify, event->subscribe.reason);
+        return 0;
+    case BLE_GAP_EVENT_MTU:
+        ESP_LOGI(TAG, "MTU: %d", event->mtu.value);
+        return 0;
+    case BLE_GAP_EVENT_REPEAT_PAIRING:
+        ESP_LOGI(TAG, "REPEAT_PAIRING: 删除旧绑定并重新配对");
+        return BLE_GAP_REPEAT_PAIRING_RETRY;
     case BLE_GAP_EVENT_ADV_COMPLETE:
         adv_start();
         return 0;
@@ -244,8 +261,9 @@ static void adv_start(void)
     struct ble_gap_adv_params params = { 0 };
     params.conn_mode = BLE_GAP_CONN_MODE_UND;
     params.disc_mode = BLE_GAP_DISC_MODE_GEN;
-    params.itvl_min = 40;   /* 25ms */
-    params.itvl_max = 80;   /* 50ms */
+    /* 100-200ms: 快速广播会与 WiFi 抢空口(coex), 实测加剧入站丢包 */
+    params.itvl_min = 160;
+    params.itvl_max = 320;
     rc = ble_gap_adv_start(s_own_addr_type, NULL, BLE_HS_FOREVER, &params, gap_event_cb, NULL);
     if (rc != 0 && rc != BLE_HS_EALREADY) {
         ESP_LOGE(TAG, "adv start failed rc=%d", rc);
