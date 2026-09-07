@@ -7,7 +7,8 @@
 extern "C" {
 #endif
 
-#define SYSMON_MAX_TASKS 24
+#define SYSMON_MAX_TASKS 40   /* 24->40: 任务数超 24 时按优先级排序,
+                               * 最低优先级的 IDLE0/IDLE1 会被截掉 -> CPU 反推 100% */
 
 typedef struct {
     char name[16];
