@@ -13,10 +13,11 @@ LV_FONT_DECLARE(lv_font_msyh_16);
  * 数据: sysmon 组件 1Hz 采样(FreeRTOS 运行时统计), 本页 1s 读快照刷新
  * ============================================================ */
 
-#define TASK_ROWS   SYSMON_MAX_TASKS
+#define TASK_ROWS   16   /* visible rows (virtual scroll window); data cap = SYSMON_MAX_TASKS */
 
 typedef struct {
     bool task_list_shown;
+    int scroll_off;                /* task list virtual scroll offset (rows) */
     lv_obj_t *ov_view;
     lv_obj_t *task_view;
     lv_obj_t *bar[5];                  /* CPU0 CPU1 ALL INT PSRAM */
@@ -143,6 +144,8 @@ static void pg_sysmon_create(page_t *p)
     lv_label_set_text(head, "TASK         CPU   STK  C ST");
     lv_obj_set_pos(head, 0, 0);
 
+    /* 只创建可见窗口的行控件(虚拟滚动), 避免一次性创建 40x4 个控件
+     * 挤爆内部内存(LVGL 控件堆在内部 SRAM, 实测 160 个 label 直接崩溃) */
     for (int i = 0; i < TASK_ROWS; i++) {
         lv_obj_t *l0 = lv_label_create(d->task_view);
         lv_obj_set_style_text_color(l0, lv_color_hex(XK_COLOR_TEXT), 0);
@@ -206,7 +209,14 @@ static void pg_sysmon_on_rotate(page_t *p, int32_t steps)
         pg_sysmon_set_view(d, true);   /* 概览页旋转进入任务表 */
         return;
     }
-    lv_obj_scroll_by(d->task_view, 0, -steps * 36, LV_ANIM_ON);
+    /* 虚拟滚动: 移动数据窗口, 下一拍刷新即重绘 */
+    int max_off = (int)d->snap.task_count - TASK_ROWS;
+    if (max_off < 0) {
+        max_off = 0;
+    }
+    d->scroll_off += (int)steps;
+    if (d->scroll_off > max_off) d->scroll_off = max_off;
+    if (d->scroll_off < 0) d->scroll_off = 0;
 }
 
 static void pg_sysmon_on_back(page_t *p)
@@ -249,18 +259,19 @@ static void sysmon_timer_cb(lv_timer_t *t)
              (unsigned)(s->min_free / 1024));
     lv_label_set_text(d->info, buf);
 
+    /* 虚拟滚动: 只渲染可见窗口 */
     for (int i = 0; i < TASK_ROWS; i++) {
         lv_obj_t **row = d->task_lab[i];
-        if (i < s->task_count) {
+        int ti = i + d->scroll_off;
+        if (ti < s->task_count) {
             char b0[24], b1[12], b2[12], b3[12];
-            snprintf(b0, sizeof(b0), "%.12s", s->tasks[i].name);
-            snprintf(b1, sizeof(b1), "%u%%", s->tasks[i].cpu);
-            snprintf(b2, sizeof(b2), "%lu", (unsigned long)s->tasks[i].stack_min);
-            /* 核心: -1 = 未固定/挂起无所属, 显示 '-' 避免和状态列挤在一起 */
-            if (s->tasks[i].core < 0) {
-                snprintf(b3, sizeof(b3), "-  %s", state_str(s->tasks[i].state));
+            snprintf(b0, sizeof(b0), "%.12s", s->tasks[ti].name);
+            snprintf(b1, sizeof(b1), "%u%%", s->tasks[ti].cpu);
+            snprintf(b2, sizeof(b2), "%lu", (unsigned long)s->tasks[ti].stack_min);
+            if (s->tasks[ti].core < 0) {
+                snprintf(b3, sizeof(b3), "-  %s", state_str(s->tasks[ti].state));
             } else {
-                snprintf(b3, sizeof(b3), "C%d %s", s->tasks[i].core, state_str(s->tasks[i].state));
+                snprintf(b3, sizeof(b3), "C%d %s", s->tasks[ti].core, state_str(s->tasks[ti].state));
             }
             lv_label_set_text(row[0], b0);
             lv_label_set_text(row[1], b1);
@@ -269,8 +280,7 @@ static void sysmon_timer_cb(lv_timer_t *t)
             for (int k = 0; k < 4; k++) {
                 lv_obj_clear_flag(row[k], LV_OBJ_FLAG_HIDDEN);
             }
-            /* 栈余量不足 1KB: 红色预警 */
-            bool low_stack = s->tasks[i].stack_min < 1000;
+            bool low_stack = s->tasks[ti].stack_min < 1000;
             lv_obj_set_style_text_color(row[2],
                 lv_color_hex(low_stack ? XK_COLOR_RED : XK_COLOR_TEXT), 0);
         } else {
