@@ -52,6 +52,17 @@ static void sample_once(void)
     }
 
     uint32_t dtotal = total - s_last_total;
+    /* ccount 32 位计数器 @160MHz 约 26.8s 回绕一次: 回绕轮的增量是天文数字,
+     * 跳过该轮并重新同步基线, 避免所有百分比算出 0 */
+    if (dtotal > 1000000000u) {
+        for (UBaseType_t i = 0; i < n && i < TASK_ARRAY_MAX; i++) {
+            s_prev[i].handle = s_states[i].xHandle;
+            s_prev[i].last_runtime = s_states[i].ulRunTimeCounter;
+        }
+        s_prev_count = n;
+        s_last_total = total;
+        return;
+    }
     uint32_t d_idle0 = 0, d_idle1 = 0;
 
     /* 按 xTaskHandle 匹配上一轮, 计算各任务运行时增量 */
