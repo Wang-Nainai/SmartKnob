@@ -168,7 +168,6 @@ typedef struct {
 } xpt2046_state_t;
 
 static xpt2046_state_t s_tp = { .io = NULL };
-static volatile touch_gesture_t s_gesture = TOUCH_GEST_NONE;   /* 滑动手势锁存(UI 任务消费) */
 static float s_press_base = -1.0f;   /* 静息压力自适应基线 */
 
 static uint16_t tp_read_reg(uint8_t cmd)
@@ -323,94 +322,12 @@ static void lvgl_touch_cb(lv_indev_t *indev, lv_indev_data_t *data)
         display_notify_activity();   /* 触摸同样唤醒/重置熄屏计时 */
     }
 
-    /* ---- 触摸接触状态机 ----
-     * WAIT: 按下后先不上报 PRESSED, 观察位移方向
-     *   - 横向主导(|dx|>15 且 |dx|>=|dy|) -> 判为横滑: 整个接触期保持
-     *     RELEASED(不产生 CLICKED), 抬起时按方向锁存手势
-     *   - 纵向主导 -> 上报 PRESSED (列表可正常滚动)
-     *   - 快速抬起(<120ms 且几乎未动) -> 重放 PRESSED+RELEASED
-     *     (保证快速轻点也能产生 CLICKED) */
-    static bool prev_touched = false;
-    static int16_t start_x = 0, start_y = 0;
-    static int16_t last_x = 0, last_y = 0;
-    static int32_t down_tick = 0;
-    typedef enum { TC_IDLE, TC_WAIT, TC_PRESSED, TC_SWIPE, TC_TAP_REPLAY } tstate_t;
-    static tstate_t tc_state = TC_IDLE;
-
-    bool cur_touched = s_tp.touched;
-    if (cur_touched) {
-        last_x = (int16_t)s_tp.x;
-        last_y = (int16_t)s_tp.y;
-    }
-    int dx = (int)last_x - start_x;
-    int dy = (int)last_y - start_y;
-    int32_t held = (int32_t)(esp_timer_get_time() / 1000) - down_tick;
-
-    if (cur_touched && !prev_touched) {
-        start_x = (int16_t)s_tp.x;
-        start_y = (int16_t)s_tp.y;
-        down_tick = (int32_t)(esp_timer_get_time() / 1000);
-        tc_state = TC_WAIT;
-    }
-
-    switch (tc_state) {
-    case TC_WAIT:
-        if (!cur_touched) {
-            tc_state = TC_TAP_REPLAY;   /* 快速轻点: 重放按下->抬起产生 CLICKED */
-        } else if (abs(dx) > 15 && abs(dx) >= abs(dy)) {
-            tc_state = TC_SWIPE;        /* 横滑: 不上报按下 */
-        } else if ((abs(dy) > 15 && abs(dy) > abs(dx)) || held > 120) {
-            tc_state = TC_PRESSED;      /* 纵滑或长按 */
-        }
-        break;
-    case TC_SWIPE:
-        if (!cur_touched) {
-            if (abs(dx) > 60) {
-                if (abs(dx) > abs(dy) * 2) {
-                    s_gesture = (dx > 0) ? TOUCH_GEST_SWIPE_RIGHT : TOUCH_GEST_SWIPE_LEFT;
-                } else {
-                    s_gesture = (dy > 0) ? TOUCH_GEST_SWIPE_DOWN : TOUCH_GEST_SWIPE_UP;
-                }
-            }
-            tc_state = TC_IDLE;
-        }
-        break;
-    case TC_PRESSED:
-        if (!cur_touched) {
-            tc_state = TC_IDLE;
-        }
-        break;
-    case TC_TAP_REPLAY:
-        /* 上一拍已报 PRESSED, 这一拍报 RELEASED 完成 CLICKED */
-        tc_state = TC_IDLE;
-        break;
-    default:
-        break;
-    }
-    prev_touched = cur_touched;
-
-    switch (tc_state) {
-    case TC_PRESSED:
-        data->point.x = s_tp.x;
-        data->point.y = s_tp.y;
-        data->state = LV_INDEV_STATE_PRESSED;
-        break;
-    case TC_TAP_REPLAY:
-        data->point.x = start_x;
-        data->point.y = start_y;
-        data->state = LV_INDEV_STATE_PRESSED;
-        break;
-    default:
-        data->state = LV_INDEV_STATE_RELEASED;
-        break;
-    }
-}
-
-touch_gesture_t display_touch_pop_gesture(void)
-{
-    touch_gesture_t g = s_gesture;
-    s_gesture = TOUCH_GEST_NONE;
-    return g;
+    /* 如实上报按下/抬起: 点按 CLICKED 由 LVGL 原生机制产生, 不再延迟观察。
+     * 滑动手势由 LVGL 原生 GESTURE 事件处理(smartknob_ui.c page_gesture_cb):
+     * 拖动超阈值时框架层 lv_indev_reset 取消按压, 手势不会误触发 CLICKED。 */
+    data->point.x = s_tp.x;
+    data->point.y = s_tp.y;
+    data->state = s_tp.touched ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
 }
 
 static void increase_lvgl_tick(void *arg)

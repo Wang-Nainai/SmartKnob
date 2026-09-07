@@ -1,7 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "page_mgr.h"
-#include "display.h"
 #include "motor.h"
 #include "blehid.h"
 
@@ -220,9 +219,9 @@ static void pg_pcdial_on_tick(page_t *p)
     pc_ble_status_refresh((pc_data_t *)p->data);
 }
 
-/* 触摸手势(由 smartknob_ui 路由): 横滑=音量加减, 竖滑=鼠标滚轮
- * g 取值见 display.h touch_gesture_t */
-void pg_pcdial_handle_gesture(int g)
+/* 触摸手势(LVGL 原生 GESTURE 事件, 由 smartknob_ui 路由):
+ * 横滑=音量加减, 竖滑=鼠标滚轮 */
+void pg_pcdial_gesture(lv_dir_t dir)
 {
     if (!blehid_is_connected()) {
         return;
@@ -235,19 +234,19 @@ void pg_pcdial_handle_gesture(int g)
     }
     last_gesture_tick = now;
 
-    switch (g) {
-    case (int)TOUCH_GEST_SWIPE_RIGHT:
+    switch (dir) {
+    case LV_DIR_RIGHT:
         blehid_consumer_send(HID_CONSUMER_VOLUME_UP);
         pm_shake();
         break;
-    case (int)TOUCH_GEST_SWIPE_LEFT:
+    case LV_DIR_LEFT:
         blehid_consumer_send(HID_CONSUMER_VOLUME_DOWN);
         pm_shake();
         break;
-    case (int)TOUCH_GEST_SWIPE_UP:
+    case LV_DIR_TOP:
         blehid_mouse_scroll(2);
         break;
-    case (int)TOUCH_GEST_SWIPE_DOWN:
+    case LV_DIR_BOTTOM:
         blehid_mouse_scroll(-2);
         break;
     default:

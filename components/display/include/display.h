@@ -13,18 +13,6 @@ void display_lvgl_unlock(void);
 /* XPT2046 原始读数(工厂诊断); 返回当前是否触压 */
 bool display_touch_get_raw(uint16_t *z1, uint16_t *z2, uint16_t *raw_x, uint16_t *raw_y);
 
-/* 触摸滑动手势 */
-typedef enum {
-    TOUCH_GEST_NONE = 0,
-    TOUCH_GEST_SWIPE_LEFT,    /* 向左滑 */
-    TOUCH_GEST_SWIPE_RIGHT,   /* 向右滑 */
-    TOUCH_GEST_SWIPE_UP,      /* 向上滑 */
-    TOUCH_GEST_SWIPE_DOWN,    /* 向下滑 */
-} touch_gesture_t;
-
-/* 取走并清除最近一次滑动手势(水平或垂直, 位移>60px); 无手势返回 TOUCH_GEST_NONE */
-touch_gesture_t display_touch_pop_gesture(void);
-
 /* Backlight PWM brightness, 0-100 percent (0 = screen off) */
 void display_set_brightness(int percent);
 int display_get_brightness(void);

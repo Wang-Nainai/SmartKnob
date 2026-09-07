@@ -70,6 +70,8 @@ static lv_obj_t *sb_mqtt;
 static lv_obj_t *sb_time;
 
 static void status_bar_update(void);
+static void page_gesture_cb(lv_event_t *e);
+static void gesture_bubble_install(lv_obj_t *obj);
 
 bool pm_busy(void)
 {
@@ -160,6 +162,8 @@ static page_t *pm_create_page(page_id_t id)
     if (p->ops->create) {
         p->ops->create(p);
     }
+    lv_obj_add_event_cb(p->root, page_gesture_cb, LV_EVENT_GESTURE, NULL);
+    gesture_bubble_install(p->root);
     return p;
 }
 
@@ -377,6 +381,52 @@ static void status_bar_create(void)
     lv_obj_set_style_text_font(sb_time, &lv_font_montserrat_14, 0);
     lv_label_set_text(sb_time, "--:--");
     lv_obj_align(sb_time, LV_ALIGN_RIGHT_MID, -6, 0);
+
+    lv_obj_add_event_cb(bar, page_gesture_cb, LV_EVENT_GESTURE, NULL);
+    gesture_bubble_install(bar);
+}
+
+/* ---------------- 触摸手势 (LVGL 原生 GESTURE 事件) ----------------
+ * 拖动超过阈值(20px)时 LVGL 发送 LV_EVENT_GESTURE:
+ *   - S-Dial 页: 横滑=音量加减, 竖滑=鼠标滚轮
+ *   - 其它页: 左右横滑 = 返回
+ * 回调内 lv_indev_reset 取消本次按压, 手势绝不误触发 CLICKED */
+static void page_gesture_cb(lv_event_t *e)
+{
+    lv_indev_t *indev = lv_event_get_indev(e);
+    lv_dir_t dir = lv_indev_get_gesture_dir(indev);
+    display_notify_activity();
+    if (pm_animating) {
+        return;
+    }
+    page_t *top = pm_top();
+    if (!top) {
+        return;
+    }
+    if (top->ops == &pg_pcdial_ops) {
+        extern void pg_pcdial_gesture(lv_dir_t dir);
+        pg_pcdial_gesture(dir);
+        lv_indev_reset(indev, NULL);
+        return;
+    }
+    if (dir == LV_DIR_LEFT || dir == LV_DIR_RIGHT) {
+        if (top->ops->on_back) {
+            top->ops->on_back(top);
+            pm_shake();
+        }
+        lv_indev_reset(indev, NULL);
+    }
+}
+
+/* 子控件开启手势冒泡, 使 GESTURE 事件汇聚到容器(页面根/状态栏) */
+static void gesture_bubble_install(lv_obj_t *obj)
+{
+    uint32_t n = lv_obj_get_child_count(obj);
+    for (uint32_t i = 0; i < n; i++) {
+        lv_obj_t *c = lv_obj_get_child(obj, i);
+        lv_obj_add_flag(c, LV_OBJ_FLAG_GESTURE_BUBBLE);
+        gesture_bubble_install(c);
+    }
 }
 
 /* ---------------- 旋钮输入消费 (LVGL 任务内) ---------------- */
@@ -384,27 +434,6 @@ static void status_bar_create(void)
 static void input_timer_cb(lv_timer_t *t)
 {
     (void)t;
-    /* 滑动手势路由: S-Dial 页自用(横滑=音量/竖滑=滚轮), 其它页横滑=返回 */
-    touch_gesture_t g = display_touch_pop_gesture();
-    if (g != TOUCH_GEST_NONE) {
-        display_notify_activity();
-        if (!pm_animating) {
-            page_t *top = pm_top();
-            if (top) {
-                if (top->ops == &pg_pcdial_ops) {
-                    extern void pg_pcdial_handle_gesture(int g);
-                    pg_pcdial_handle_gesture((int)g);
-                } else if (g == TOUCH_GEST_SWIPE_LEFT || g == TOUCH_GEST_SWIPE_RIGHT) {
-                    if (top->ops->on_back) {
-                        top->ops->on_back(top);
-                        pm_shake();
-                    }
-                }
-            }
-        }
-        return;
-    }
-
     knob_event_t evt;
     bool woke = false;
     while (knob_input_get_event(&evt)) {
