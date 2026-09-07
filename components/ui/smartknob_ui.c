@@ -356,28 +356,41 @@ static void status_bar_create(void)
     lv_obj_set_style_text_color(sb_title, lv_color_hex(XK_COLOR_TEXT), 0);
     lv_obj_set_style_text_font(sb_title, &lv_font_msyh_16, 0);
     lv_label_set_text(sb_title, "");
-    /* 左对齐+限宽: 避免长标题(如 SmartKnob)与右侧 WiFi/BLE/MQTT 图标重叠 */
-    lv_obj_set_width(sb_title, 100);
+    /* 左对齐+限宽: 避免长标题(如 SmartKnob)与右侧图标重叠 */
+    lv_obj_set_width(sb_title, 80);
     lv_label_set_long_mode(sb_title, LV_LABEL_LONG_DOT);
     lv_obj_align(sb_title, LV_ALIGN_LEFT_MID, 30, 0);
 
-    sb_wifi = lv_label_create(bar);
+    /* 右侧三图标: 等宽格子 + 统一间距的 flex 容器。
+     * 原先各自固定右偏移(-90/-66/-44), 但 WiFi 符号比其它宽,
+     * 视觉间距忽大忽小; 现在每格 20px 居中、间距 8px, 完全均匀 */
+    lv_obj_t *icons = lv_obj_create(bar);
+    lv_obj_remove_style_all(icons);
+    lv_obj_set_size(icons, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(icons, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(icons, 8, 0);
+    lv_obj_align(icons, LV_ALIGN_RIGHT_MID, -50, 0);
+
+    sb_wifi = lv_label_create(icons);
     lv_obj_set_style_text_color(sb_wifi, lv_color_hex(XK_COLOR_FAINT), 0);
     lv_obj_set_style_text_font(sb_wifi, &lv_font_montserrat_14, 0);
     lv_label_set_text(sb_wifi, LV_SYMBOL_WIFI);
-    lv_obj_align(sb_wifi, LV_ALIGN_RIGHT_MID, -90, 0);
+    lv_obj_set_width(sb_wifi, 20);
+    lv_obj_set_style_text_align(sb_wifi, LV_TEXT_ALIGN_CENTER, 0);
 
-    sb_ble = lv_label_create(bar);
+    sb_ble = lv_label_create(icons);
     lv_obj_set_style_text_color(sb_ble, lv_color_hex(XK_COLOR_FAINT), 0);
     lv_obj_set_style_text_font(sb_ble, &lv_font_montserrat_14, 0);
     lv_label_set_text(sb_ble, LV_SYMBOL_BLUETOOTH);
-    lv_obj_align(sb_ble, LV_ALIGN_RIGHT_MID, -66, 0);
+    lv_obj_set_width(sb_ble, 20);
+    lv_obj_set_style_text_align(sb_ble, LV_TEXT_ALIGN_CENTER, 0);
 
-    sb_mqtt = lv_label_create(bar);
+    sb_mqtt = lv_label_create(icons);
     lv_obj_set_style_text_color(sb_mqtt, lv_color_hex(XK_COLOR_FAINT), 0);
     lv_obj_set_style_text_font(sb_mqtt, &lv_font_montserrat_14, 0);
     lv_label_set_text(sb_mqtt, LV_SYMBOL_UPLOAD);
-    lv_obj_align(sb_mqtt, LV_ALIGN_RIGHT_MID, -44, 0);
+    lv_obj_set_width(sb_mqtt, 20);
+    lv_obj_set_style_text_align(sb_mqtt, LV_TEXT_ALIGN_CENTER, 0);
 
     sb_time = lv_label_create(bar);
     lv_obj_set_style_text_color(sb_time, lv_color_hex(XK_COLOR_TEXT), 0);
