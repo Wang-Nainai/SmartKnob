@@ -256,7 +256,12 @@ static void sysmon_timer_cb(lv_timer_t *t)
             snprintf(b0, sizeof(b0), "%.12s", s->tasks[i].name);
             snprintf(b1, sizeof(b1), "%u%%", s->tasks[i].cpu);
             snprintf(b2, sizeof(b2), "%lu", (unsigned long)s->tasks[i].stack_min);
-            snprintf(b3, sizeof(b3), "%d %s", s->tasks[i].core, state_str(s->tasks[i].state));
+            /* 核心: -1 = 未固定/挂起无所属, 显示 '-' 避免和状态列挤在一起 */
+            if (s->tasks[i].core < 0) {
+                snprintf(b3, sizeof(b3), "-  %s", state_str(s->tasks[i].state));
+            } else {
+                snprintf(b3, sizeof(b3), "C%d %s", s->tasks[i].core, state_str(s->tasks[i].state));
+            }
             lv_label_set_text(row[0], b0);
             lv_label_set_text(row[1], b1);
             lv_label_set_text(row[2], b2);
