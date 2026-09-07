@@ -170,7 +170,7 @@ static void pg_pcdial_create(page_t *p)
     lv_obj_set_style_bg_color(d->btn_play, lv_color_hex(XK_COLOR_PANEL), 0);
     lv_obj_set_style_bg_opa(d->btn_play, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(d->btn_play, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_border_color(d->btn_play, lv_color_hex(XK_COLOR_RED), 0);
+    lv_obj_set_style_border_color(d->btn_play, lv_color_hex(XK_COLOR_ACCENT), 0);
     lv_obj_set_style_border_width(d->btn_play, 2, 0);
     lv_obj_set_user_data(d->btn_play, p);
     lv_obj_add_event_cb(d->btn_play, pc_tap_cb, LV_EVENT_CLICKED, NULL);

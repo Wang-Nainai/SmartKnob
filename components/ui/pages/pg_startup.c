@@ -33,7 +33,7 @@ static void pg_startup_create(page_t *p)
     lv_obj_t *cont = lv_obj_create(p->root);
     lv_obj_remove_style_all(cont);
     lv_obj_set_size(cont, 110, 40);
-    lv_obj_set_style_border_color(cont, lv_color_hex(XK_COLOR_RED), 0);
+    lv_obj_set_style_border_color(cont, lv_color_hex(XK_COLOR_ACCENT), 0);
     lv_obj_set_style_border_side(cont, LV_BORDER_SIDE_BOTTOM, 0);
     lv_obj_set_style_border_width(cont, 3, 0);
     lv_obj_set_style_border_post(cont, true, 0);

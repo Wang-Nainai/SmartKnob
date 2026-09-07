@@ -227,7 +227,7 @@ static void pg_setting_create(page_t *p)
         lv_obj_set_style_width(icon, ICON_W_FOCUS, LV_STATE_FOCUSED);
         lv_obj_set_style_border_side(icon, LV_BORDER_SIDE_RIGHT, LV_STATE_FOCUSED);
         lv_obj_set_style_border_width(icon, 2, LV_STATE_FOCUSED);
-        lv_obj_set_style_border_color(icon, lv_color_hex(XK_COLOR_RED), LV_STATE_FOCUSED);
+        lv_obj_set_style_border_color(icon, lv_color_hex(XK_COLOR_ACCENT), LV_STATE_FOCUSED);
 
         static lv_style_transition_dsc_t trans;
         static const lv_style_prop_t props[] = { LV_STYLE_WIDTH, LV_STYLE_PROP_INV };
@@ -285,11 +285,11 @@ static void pg_setting_create(page_t *p)
     lv_scale_set_label_show(d->scale, false);
     lv_obj_set_style_length(d->scale, 6, LV_PART_ITEMS);
     lv_obj_set_style_line_width(d->scale, 2, LV_PART_ITEMS);
-    lv_obj_set_style_line_color(d->scale, lv_color_hex(XK_COLOR_RED), LV_PART_ITEMS);
+    lv_obj_set_style_line_color(d->scale, lv_color_hex(XK_COLOR_ACCENT), LV_PART_ITEMS);
     lv_obj_set_style_length(d->scale, 14, LV_PART_INDICATOR);
     lv_obj_set_style_line_width(d->scale, 3, LV_PART_INDICATOR);
-    lv_obj_set_style_line_color(d->scale, lv_color_hex(XK_COLOR_RED), LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(d->scale, lv_color_hex(XK_COLOR_RED), LV_PART_MAIN);
+    lv_obj_set_style_line_color(d->scale, lv_color_hex(XK_COLOR_ACCENT), LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(d->scale, lv_color_hex(XK_COLOR_ACCENT), LV_PART_MAIN);
     lv_obj_set_style_arc_width(d->scale, 2, LV_PART_MAIN);
     lv_scale_set_total_tick_count(d->scale, 41);
     lv_scale_set_major_tick_every(d->scale, 1);

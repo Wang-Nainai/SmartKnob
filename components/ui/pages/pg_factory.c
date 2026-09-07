@@ -47,7 +47,7 @@ static void factory_refresh(factory_data_t *d)
     for (int i = 0; i < FACTORY_ITEMS; i++) {
         lv_obj_t *row = d->rows[i];
         if (i == d->focus) {
-            lv_obj_set_style_border_color(row, lv_color_hex(XK_COLOR_RED), 0);
+            lv_obj_set_style_border_color(row, lv_color_hex(XK_COLOR_ACCENT), 0);
             lv_obj_set_style_border_width(row, 2, 0);
             lv_obj_set_style_bg_color(row, lv_color_hex(XK_COLOR_PANEL), 0);
             lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
@@ -201,7 +201,7 @@ static void pg_factory_create(page_t *p)
         lv_obj_set_size(row, 240, 44);
         lv_obj_set_pos(row, 0, 30 + i * 44);
         lv_obj_set_style_border_side(row, LV_BORDER_SIDE_LEFT, 0);
-        lv_obj_set_style_border_color(row, lv_color_hex(XK_COLOR_RED), 0);
+        lv_obj_set_style_border_color(row, lv_color_hex(XK_COLOR_ACCENT), 0);
         lv_obj_set_style_border_post(row, true, 0);
         lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_user_data(row, p);

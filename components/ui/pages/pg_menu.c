@@ -1,5 +1,4 @@
-﻿#include <stdio.h>
-#include <stdlib.h>
+﻿#include <stdlib.h>
 #include "page_mgr.h"
 #include "motor.h"
 
@@ -8,17 +7,20 @@ LV_FONT_DECLARE(lv_font_msyh_16);
 
 /* ============================================================
  * X-Knob 风格主菜单
- * - 全屏纵向大列表(单项 100px), 滚动跟随焦点
- * - 左侧图标列: 聚焦时缩窄(220→70)并显示右侧 2px 红边,
- *   宽度过渡动画(overshoot 200ms) —— X-Knob MenuView 复刻
- * - 右侧灰色多行功能描述
- * - 旋转 = 移动焦点, 点击 = 进入
+ * - 6 行全部放下(60px/行), 容器不可滚动 —— 滑动不再触发滚动/误点
+ * - 左侧图标列: 聚焦 220→70 显式宽度动画(180ms 缓出),
+ *   旧行展开 + 新行收窄同时进行, 右侧 2px 蓝紫边
+ * - 右侧灰色多行功能描述(仅聚焦行)
+ * - 旋转 = 移动焦点, 点击 = 进入(滑动>20px 不算点击)
  * ============================================================ */
 
-#define ITEM_H        100
-#define ITEM_PAD      ((320 - ITEM_H) / 2)
-#define ICON_W_OPEN   220   /* 未聚焦: 图标列占满, 遮住描述 */
-#define ICON_W_FOCUS  70    /* 聚焦: 收窄, 露出描述 + 右侧红边 */
+#define ITEM_H        60
+#define GAP           2
+#define PAD_VER       10
+#define ICON_W_OPEN   220   /* 未聚焦: 图标列占满 */
+#define ICON_W_FOCUS  70    /* 聚焦: 收窄, 露出描述 + 右侧主题边 */
+#define ANIM_MS       180
+#define SWIPE_PX      20
 
 typedef struct {
     int focus;
@@ -56,27 +58,60 @@ static const menu_item_t items[] = {
 };
 #define MENU_COUNT (sizeof(items) / sizeof(items[0]))
 
+static void menu_anim_width(lv_obj_t *icon, int32_t target)
+{
+    int32_t cur = lv_obj_get_width(icon);
+    if (cur == target) {
+        return;
+    }
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, icon);
+    lv_anim_set_exec_cb(&a, (lv_anim_exec_xcb_t)lv_obj_set_width);
+    lv_anim_set_values(&a, cur, target);
+    lv_anim_set_duration(&a, ANIM_MS);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+    lv_anim_start(&a);
+}
+
 static void menu_set_focus(menu_data_t *d, int idx)
 {
     if (idx < 0 || idx >= (int)MENU_COUNT) {
         return;
     }
+    d->focus = idx;
     for (int i = 0; i < (int)MENU_COUNT; i++) {
-        if (i == idx) {
-            lv_obj_add_state(d->icons[i], LV_STATE_FOCUSED);
+        bool f = (i == idx);
+        /* 显式宽度动画: 同图标重复动画自动替换, 快速旋转安全 */
+        menu_anim_width(d->icons[i], f ? ICON_W_FOCUS : ICON_W_OPEN);
+        /* 主题色边: 仅聚焦行, 显式设置(不用状态样式, 杜绝双行残留) */
+        lv_obj_set_style_border_width(d->icons[i], f ? 2 : 0, 0);
+        /* 说明文字仅聚焦行显示 */
+        if (f) {
+            lv_obj_remove_flag(d->infos[i], LV_OBJ_FLAG_HIDDEN);
         } else {
-            lv_obj_remove_state(d->icons[i], LV_STATE_FOCUSED);
+            lv_obj_add_flag(d->infos[i], LV_OBJ_FLAG_HIDDEN);
         }
-        /* 说明文字仅聚焦行显示(不再靠背景遮挡, 透明背景下会透出) */
-        lv_obj_add_flag(d->infos[i], LV_OBJ_FLAG_HIDDEN);
     }
-    lv_obj_remove_flag(d->infos[idx], LV_OBJ_FLAG_HIDDEN);
-    lv_obj_scroll_to_view(d->rows[idx], LV_ANIM_ON);
 }
 
-/* 点击列表项 → 进入 */
+/* 点击列表项 → 进入 (滑动超过阈值不算点击, 防误触发) */
+static lv_point_t press_pt;
+
+static void menu_row_pressing_cb(lv_event_t *e)
+{
+    lv_indev_get_point(lv_indev_active(), &press_pt);
+}
+
 static void menu_row_cb(lv_event_t *e)
 {
+    lv_point_t now;
+    lv_indev_get_point(lv_indev_active(), &now);
+    int dx = now.x - press_pt.x;
+    int dy = now.y - press_pt.y;
+    if (dx * dx + dy * dy > SWIPE_PX * SWIPE_PX) {
+        return;   /* 滑动, 不是点击 */
+    }
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
     if (idx < 0 || idx >= (int)MENU_COUNT) {
         return;
@@ -92,9 +127,12 @@ static void pg_menu_create(page_t *p)
     d->focus = 0;
     p->title = "SmartKnob";
 
+    /* 整页不可滚动: 6 行全部放下, 滑动手势不再滚动菜单 */
+    lv_obj_clear_flag(p->root, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(p->root, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(p->root, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_ver(p->root, ITEM_PAD, 0);
+    lv_obj_set_style_pad_ver(p->root, PAD_VER, 0);
+    lv_obj_set_style_pad_row(p->root, GAP, 0);
 
     for (int i = 0; i < (int)MENU_COUNT; i++) {
         /* 行容器 */
@@ -103,26 +141,21 @@ static void pg_menu_create(page_t *p)
         lv_obj_set_size(row, 220, ITEM_H);
         lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(row, menu_row_pressing_cb, LV_EVENT_PRESSING, (void *)(intptr_t)i);
         lv_obj_add_event_cb(row, menu_row_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
         d->rows[i] = row;
 
-        /* 左侧图标列 (聚焦收窄 + 红右边界, X-Knob signature) */
+        /* 左侧图标列 (聚焦收窄 + 右侧蓝紫边, X-Knob signature) */
         lv_obj_t *icon = lv_obj_create(row);
         lv_obj_remove_style_all(icon);
         lv_obj_set_size(icon, ICON_W_OPEN, ITEM_H);
-        /* 背景透明: 与页面同色无需填充, 滚动时大幅减少每帧绘制量 */
         lv_obj_set_style_align(icon, LV_ALIGN_LEFT_MID, 0);
         lv_obj_clear_flag(icon, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_flex_flow(icon, LV_FLEX_FLOW_COLUMN);
         lv_obj_set_flex_align(icon, LV_FLEX_ALIGN_SPACE_AROUND, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-        /* 聚焦态样式: 收窄 + 右侧红边 */
-        lv_obj_set_style_width(icon, ICON_W_FOCUS, LV_STATE_FOCUSED);
-        lv_obj_set_style_border_side(icon, LV_BORDER_SIDE_RIGHT, LV_STATE_FOCUSED);
-        lv_obj_set_style_border_width(icon, 2, LV_STATE_FOCUSED);
-        lv_obj_set_style_border_color(icon, lv_color_hex(XK_COLOR_RED), LV_STATE_FOCUSED);
-
-        /* 宽度过渡动画 (X-Knob: overshoot 200ms) */
+        lv_obj_set_style_border_side(icon, LV_BORDER_SIDE_RIGHT, 0);
+        lv_obj_set_style_border_color(icon, lv_color_hex(XK_COLOR_ACCENT), 0);
+        lv_obj_set_style_border_post(icon, true, 0);
 
         /* 图标 + 名称 (纵向堆叠) */
         lv_obj_t *img = lv_label_create(icon);
@@ -141,7 +174,7 @@ static void pg_menu_create(page_t *p)
         lv_obj_set_style_text_color(info, lv_color_hex(XK_COLOR_GRAY), 0);
         lv_obj_set_style_text_font(info, &lv_font_msyh_16, 0);
         lv_label_set_text(info, items[i].desc);
-        lv_obj_align(info, LV_ALIGN_LEFT_MID, ICON_W_FOCUS + 5, 0);
+        lv_obj_align(info, LV_ALIGN_LEFT_MID, ICON_W_FOCUS + 10, 0);
         lv_obj_add_flag(info, LV_OBJ_FLAG_HIDDEN);
         d->infos[i] = info;
 
@@ -162,7 +195,7 @@ static void pg_menu_on_rotate(page_t *p, int32_t steps)
 {
     menu_data_t *d = p->data;
     int n = (int)MENU_COUNT;
-    /* 无级循环: 1-2-3-4-5-1-2-3 连续旋转 */
+    /* 无级循环: 1-2-3-4-5-6-1-2-3 连续旋转 */
     d->focus = (d->focus + steps) % n;
     if (d->focus < 0) {
         d->focus += n;

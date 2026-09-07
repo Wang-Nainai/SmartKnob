@@ -158,7 +158,7 @@ static void pg_playground_create(page_t *p)
     /* 主刻度: 红色加长(X-Knob 识别符号) */
     lv_obj_set_style_length(d->scale, 12, LV_PART_INDICATOR);
     lv_obj_set_style_line_width(d->scale, 2, LV_PART_INDICATOR);
-    lv_obj_set_style_line_color(d->scale, lv_color_hex(XK_COLOR_RED), LV_PART_INDICATOR);
+    lv_obj_set_style_line_color(d->scale, lv_color_hex(XK_COLOR_ACCENT), LV_PART_INDICATOR);
     /* 外环: 极细暗灰 */
     lv_obj_set_style_arc_color(d->scale, lv_color_hex(0x3A3A3A), LV_PART_MAIN);
     lv_obj_set_style_arc_width(d->scale, 1, LV_PART_MAIN);
