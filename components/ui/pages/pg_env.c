@@ -3,11 +3,10 @@
 #include "page_mgr.h"
 #include "motor.h"
 
-extern const page_ops_t pg_env_ops;
-
 void ui_env_get(uint16_t *co2, float *temp, float *rh, uint8_t *has_data);
 
 LV_FONT_DECLARE(lv_font_montserrat_14);
+LV_FONT_DECLARE(lv_font_montserrat_26);
 LV_FONT_DECLARE(lv_font_montserrat_48);
 LV_FONT_DECLARE(lv_font_msyh_16);
 
@@ -16,14 +15,16 @@ typedef struct {
     float temp;
     float rh;
     uint8_t has_data;
-    lv_obj_t *scale;
-    lv_obj_t *needle;
-    lv_obj_t *label_value;
-    lv_obj_t *label_level;
-    lv_obj_t *label_sub;
+    lv_obj_t *badge;        /* 等级徽章(圆角胶囊) */
+    lv_obj_t *label_badge;
+    lv_obj_t *label_value;  /* CO2 大数字 */
+    lv_obj_t *bar;          /* CO2 彩色条 */
+    lv_obj_t *label_t;      /* 温度值 */
+    lv_obj_t *label_h;      /* 湿度值 */
     lv_timer_t *timer;
 } env_data_t;
 
+/* 等级 -> 颜色(绿色系到红色系) */
 static uint32_t env_level_color(uint16_t co2)
 {
     if (co2 < 450)  return 0x00C864;
@@ -37,13 +38,43 @@ static uint32_t env_level_color(uint16_t co2)
 
 static const char *env_level_name(uint16_t co2)
 {
-    if (co2 < 450)  return "\xE6\xB8\x85\xE6\x96\xB0";
-    if (co2 < 800)  return "\xE4\xBC\x98\xE7\xA7\x80";
-    if (co2 < 1000) return "\xE8\x89\xAF\xE5\xA5\xBD";
-    if (co2 < 1500) return "\xE8\xBE\x83\xE5\xB7\xAE";
-    if (co2 < 2500) return "\xE4\xB8\xA5\xE9\x87\x8D";
-    if (co2 < 5000) return "\xE5\x8D\xB1\xE9\x99\xA9";
-    return "\xE6\x9E\x81\xE6\xAF\x92";
+    if (co2 < 450)  return "\xE6\xB8\x85\xE6\x96\xB0";   /* 清新 */
+    if (co2 < 800)  return "\xE4\xBC\x98\xE7\xA7\x80";   /* 优秀 */
+    if (co2 < 1000) return "\xE8\x89\xAF\xE5\xA5\xBD";   /* 良好 */
+    if (co2 < 1500) return "\xE8\xBE\x83\xE5\xB7\xAE";   /* 较差 */
+    if (co2 < 2500) return "\xE4\xB8\xA5\xE9\x87\x8D";   /* 严重 */
+    if (co2 < 5000) return "\xE5\x8D\xB1\xE9\x99\xA9";   /* 危险 */
+    return "\xE6\x9E\x81\xE6\xAF\x92";                   /* 极毒 */
+}
+
+/* 圆角卡片: 名称 + 大数值 + 单位 */
+static void env_card(lv_obj_t *parent, int x, const char *name,
+                     lv_obj_t **value_out)
+{
+    lv_obj_t *card = lv_obj_create(parent);
+    lv_obj_remove_style_all(card);
+    lv_obj_set_size(card, 92, 104);
+    lv_obj_set_pos(card, x, 176);
+    lv_obj_set_style_bg_color(card, lv_color_hex(XK_COLOR_PANEL), 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(card, 12, 0);
+    lv_obj_set_style_border_color(card, lv_color_hex(XK_COLOR_BORDER), 0);
+    lv_obj_set_style_border_width(card, 1, 0);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *nm = lv_label_create(card);
+    lv_obj_set_style_text_color(nm, lv_color_hex(XK_COLOR_GRAY), 0);
+    lv_obj_set_style_text_font(nm, &lv_font_msyh_16, 0);
+    lv_label_set_text(nm, name);
+    lv_obj_align(nm, LV_ALIGN_TOP_MID, 0, 10);
+
+    lv_obj_t *val = lv_label_create(card);
+    lv_obj_set_style_text_color(val, lv_color_hex(XK_COLOR_TEXT), 0);
+    lv_obj_set_style_text_font(val, &lv_font_montserrat_26, 0);
+    lv_label_set_text(val, "--");
+    lv_obj_align(val, LV_ALIGN_BOTTOM_MID, 0, -34);
+
+    *value_out = val;
 }
 
 static void env_timer_cb(lv_timer_t *t)
@@ -52,27 +83,30 @@ static void env_timer_cb(lv_timer_t *t)
     char buf[48];
 
     if (d->has_data) {
-        uint16_t pct = d->co2 > 5000 ? 100 : (uint16_t)((uint32_t)d->co2 * 100 / 5000);
-        int32_t val = (int32_t)pct * 72 / 100;
-        lv_scale_set_line_needle_value(d->scale, d->needle, 95, val);
+        uint32_t col = env_level_color(d->co2);
+
+        lv_obj_set_style_bg_color(d->badge, lv_color_hex(col), 0);
+        lv_label_set_text(d->label_badge, env_level_name(d->co2));
 
         snprintf(buf, sizeof(buf), "%u", d->co2);
         lv_label_set_text(d->label_value, buf);
-        lv_obj_set_style_text_color(d->label_value, lv_color_hex(env_level_color(d->co2)), 0);
+        lv_obj_set_style_text_color(d->label_value, lv_color_hex(col), 0);
 
-        lv_label_set_text(d->label_level, env_level_name(d->co2));
-        lv_obj_set_style_text_color(d->label_level, lv_color_hex(env_level_color(d->co2)), 0);
+        lv_bar_set_value(d->bar, d->co2 > 5000 ? 5000 : d->co2, LV_ANIM_OFF);
+        lv_obj_set_style_bg_color(d->bar, lv_color_hex(col), LV_PART_INDICATOR);
 
-        snprintf(buf, sizeof(buf), "\xE6\xB8\xA9\xE5\xBA\xA6 %.1f\xC2\xB0" "C    \xE6\xB9\xBF\xE5\xBA\xA6 %.0f%%",
-                 d->temp, d->rh);
-        lv_label_set_text(d->label_sub, buf);
+        snprintf(buf, sizeof(buf), "%.1f", d->temp);
+        lv_label_set_text(d->label_t, buf);
+        snprintf(buf, sizeof(buf), "%.0f", d->rh);
+        lv_label_set_text(d->label_h, buf);
     } else {
-        lv_scale_set_line_needle_value(d->scale, d->needle, 95, 0);
+        lv_obj_set_style_bg_color(d->badge, lv_color_hex(XK_COLOR_FAINT), 0);
+        lv_label_set_text(d->label_badge, "\xE7\xAD\x89\xE5\xBE\x85\xE6\x95\xB0\xE6\x8D\xAE");
         lv_label_set_text(d->label_value, "--");
         lv_obj_set_style_text_color(d->label_value, lv_color_hex(XK_COLOR_GRAY), 0);
-        lv_label_set_text(d->label_level, "\xE7\xAD\x89\xE5\xBE\x85\xE6\x95\xB0\xE6\x8D\xAE");
-        lv_obj_set_style_text_color(d->label_level, lv_color_hex(XK_COLOR_GRAY), 0);
-        lv_label_set_text(d->label_sub, "SCD40");
+        lv_bar_set_value(d->bar, 0, LV_ANIM_OFF);
+        lv_label_set_text(d->label_t, "--");
+        lv_label_set_text(d->label_h, "--");
     }
 }
 
@@ -82,67 +116,57 @@ static void pg_env_create(page_t *p)
     p->data = d;
     p->title = "\xE7\x8E\xAF\xE5\xA2\x83";
 
+    /* ---- CO2 等级徽章(圆角胶囊) ---- */
+    d->badge = lv_obj_create(p->root);
+    lv_obj_remove_style_all(d->badge);
+    lv_obj_set_size(d->badge, 72, 26);
+    lv_obj_set_pos(d->badge, 84, 30);
+    lv_obj_set_style_bg_color(d->badge, lv_color_hex(XK_COLOR_FAINT), 0);
+    lv_obj_set_style_bg_opa(d->badge, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(d->badge, 13, 0);
+    lv_obj_clear_flag(d->badge, LV_OBJ_FLAG_SCROLLABLE);
+
+    d->label_badge = lv_label_create(d->badge);
+    lv_obj_set_style_text_color(d->label_badge, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_text_font(d->label_badge, &lv_font_msyh_16, 0);
+    lv_label_set_text(d->label_badge, "\xE7\xAD\x89\xE5\xBE\x85\xE6\x95\xB0\xE6\x8D\xAE");
+    lv_obj_center(d->label_badge);
+
+    /* ---- CO2 大数字 ---- */
+    d->label_value = lv_label_create(p->root);
+    lv_obj_set_style_text_color(d->label_value, lv_color_hex(XK_COLOR_GRAY), 0);
+    lv_obj_set_style_text_font(d->label_value, &lv_font_montserrat_48, 0);
+    lv_label_set_text(d->label_value, "--");
+    lv_obj_align(d->label_value, LV_ALIGN_TOP_MID, 0, 62);
+
+    lv_obj_t *unit = lv_label_create(p->root);
+    lv_obj_set_style_text_color(unit, lv_color_hex(XK_COLOR_GRAY), 0);
+    lv_obj_set_style_text_font(unit, &lv_font_montserrat_14, 0);
+    lv_label_set_text(unit, "CO2 / ppm");
+    lv_obj_align(unit, LV_ALIGN_TOP_MID, 0, 126);
+
+    /* ---- CO2 彩色条(0-5000ppm) ---- */
+    d->bar = lv_bar_create(p->root);
+    lv_obj_set_size(d->bar, 200, 8);
+    lv_obj_set_pos(d->bar, 20, 146);
+    lv_bar_set_range(d->bar, 0, 5000);
+    lv_bar_set_value(d->bar, 0, LV_ANIM_OFF);
+    lv_obj_set_style_radius(d->bar, 4, 0);
+    lv_obj_set_style_bg_color(d->bar, lv_color_hex(XK_COLOR_PANEL), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(d->bar, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(d->bar, lv_color_hex(XK_COLOR_FAINT), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(d->bar, LV_OPA_COVER, LV_PART_INDICATOR);
+    lv_obj_set_style_radius(d->bar, 4, LV_PART_INDICATOR);
+
+    /* ---- 温度 / 湿度 卡片 ---- */
+    env_card(p->root, 20, "\xE6\xB8\xA9\xE5\xBA\xA6", &d->label_t);
+    env_card(p->root, 128, "\xE6\xB9\xBF\xE5\xBA\xA6", &d->label_h);
+
     lv_obj_t *hint = lv_label_create(p->root);
     lv_obj_set_style_text_color(hint, lv_color_hex(XK_COLOR_FAINT), 0);
     lv_obj_set_style_text_font(hint, &lv_font_msyh_16, 0);
     lv_label_set_text(hint, "\xE5\x8F\x8D\xE8\xBD\xAC\xE8\xBF\x94\xE5\x9B\x9E");
     lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -10);
-
-    d->scale = lv_scale_create(p->root);
-    lv_obj_set_pos(d->scale, 0, 50);
-    lv_obj_set_size(d->scale, 240, 240);
-    lv_obj_set_style_bg_color(d->scale, lv_color_hex(XK_COLOR_BG), 0);
-    lv_obj_set_style_bg_grad_color(d->scale, lv_color_make(0, 48, 48), 0);
-    lv_obj_set_style_bg_grad_dir(d->scale, LV_GRAD_DIR_VER, 0);
-    lv_obj_set_style_radius(d->scale, LV_RADIUS_CIRCLE, 0);
-    lv_scale_set_mode(d->scale, LV_SCALE_MODE_ROUND_INNER);
-    lv_scale_set_label_show(d->scale, false);
-    lv_obj_set_style_length(d->scale, 6, LV_PART_ITEMS);
-    lv_obj_set_style_line_width(d->scale, 2, LV_PART_ITEMS);
-    lv_obj_set_style_line_color(d->scale, lv_color_hex(XK_COLOR_RED), LV_PART_ITEMS);
-    lv_obj_set_style_length(d->scale, 14, LV_PART_INDICATOR);
-    lv_obj_set_style_line_width(d->scale, 3, LV_PART_INDICATOR);
-    lv_obj_set_style_line_color(d->scale, lv_color_hex(XK_COLOR_RED), LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(d->scale, lv_color_hex(XK_COLOR_RED), LV_PART_MAIN);
-    lv_obj_set_style_arc_width(d->scale, 2, LV_PART_MAIN);
-    lv_scale_set_total_tick_count(d->scale, 41);
-    lv_scale_set_major_tick_every(d->scale, 1);
-    lv_scale_set_range(d->scale, 0, 72);
-    lv_scale_set_angle_range(d->scale, 360);
-    lv_scale_set_rotation(d->scale, 270);
-
-    static lv_point_precise_t needle_points[2] = { {0, 0}, {0, 0} };
-    d->needle = lv_line_create(d->scale);
-    lv_line_set_points_mutable(d->needle, needle_points, 2);
-    lv_obj_set_style_line_width(d->needle, 8, 0);
-    lv_obj_set_style_line_rounded(d->needle, true, 0);
-    lv_obj_set_style_line_color(d->needle, lv_color_hex(XK_COLOR_GREEN), 0);
-    lv_scale_set_post_draw(d->scale, true);
-    lv_scale_set_line_needle_value(d->scale, d->needle, 95, 0);
-
-    d->label_value = lv_label_create(p->root);
-    lv_obj_set_style_text_color(d->label_value, lv_color_hex(XK_COLOR_GRAY), 0);
-    lv_obj_set_style_text_font(d->label_value, &lv_font_montserrat_48, 0);
-    lv_label_set_text(d->label_value, "--");
-    lv_obj_align(d->label_value, LV_ALIGN_CENTER, 0, 60);
-
-    lv_obj_t *unit = lv_label_create(p->root);
-    lv_obj_set_style_text_color(unit, lv_color_hex(XK_COLOR_GRAY), 0);
-    lv_obj_set_style_text_font(unit, &lv_font_montserrat_14, 0);
-    lv_label_set_text(unit, "CO2 (ppm)");
-    lv_obj_align(unit, LV_ALIGN_CENTER, 0, 110);
-
-    d->label_level = lv_label_create(p->root);
-    lv_obj_set_style_text_color(d->label_level, lv_color_hex(XK_COLOR_GRAY), 0);
-    lv_obj_set_style_text_font(d->label_level, &lv_font_msyh_16, 0);
-    lv_label_set_text(d->label_level, "\xE7\xAD\x89\xE5\xBE\x85\xE6\x95\xB0\xE6\x8D\xAE");
-    lv_obj_align(d->label_level, LV_ALIGN_CENTER, 0, 150);
-
-    d->label_sub = lv_label_create(p->root);
-    lv_obj_set_style_text_color(d->label_sub, lv_color_hex(XK_COLOR_GRAY), 0);
-    lv_obj_set_style_text_font(d->label_sub, &lv_font_msyh_16, 0);
-    lv_label_set_text(d->label_sub, "SCD40");
-    lv_obj_align(d->label_sub, LV_ALIGN_CENTER, 0, 190);
 
     lv_obj_remove_flag(p->root, LV_OBJ_FLAG_SCROLLABLE);
     d->timer = lv_timer_create(env_timer_cb, 1000, d);
@@ -161,6 +185,8 @@ static void pg_env_destroy(page_t *p)
 
 static void pg_env_on_rotate(page_t *p, int32_t steps)
 {
+    (void)p;
+    (void)steps;
 }
 
 static void pg_env_on_back(page_t *p)
