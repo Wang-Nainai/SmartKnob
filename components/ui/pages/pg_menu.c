@@ -6,28 +6,24 @@ LV_FONT_DECLARE(lv_font_montserrat_26);
 LV_FONT_DECLARE(lv_font_msyh_16);
 
 /* ============================================================
- * X-Knob 风格主菜单
- * - 全屏纵向大列表(行高 100px), 触摸可上下滑动浏览(原模式),
- *   旋转/聚焦变化时自动滚动跟随焦点
+ * X-Knob 风格主菜单 (无限循环)
+ * - 内容复制 3 份(18 行), 滚过末尾无缝接回首行, 首尾相连
+ *   (副本间像素完全相同, 跳变无感)
+ * - 触摸可上下滑动浏览; 旋转 = 移动焦点(居中跟随);
+ *   点击 = 进入(滑动 >20px 不算点击)
  * - 左侧图标列: 聚焦 220→70 显式宽度动画(180ms 缓出),
- *   旧行展开 + 新行收窄同时进行, 右侧 2px 蓝紫边
+ *   旧行展开 + 新行收窄同时进行, 右侧 2px 主题色边
  * - 右侧灰色多行功能描述(仅聚焦行)
- * - 旋转 = 移动焦点, 点击 = 进入(滑动>20px 不算点击)
  * ============================================================ */
 
 #define ITEM_H        100
-#define ITEM_PAD      ((320 - ITEM_H) / 2)
 #define ICON_W_OPEN   220   /* 未聚焦: 图标列占满 */
 #define ICON_W_FOCUS  70    /* 聚焦: 收窄, 露出描述 + 右侧主题边 */
 #define ANIM_MS       180
 #define SWIPE_PX      20
-
-typedef struct {
-    int focus;
-    lv_obj_t *rows[6];
-    lv_obj_t *icons[6];
-    lv_obj_t *infos[6];
-} menu_data_t;
+#define COPY_N        3                          /* 内容复制份数 */
+#define ROWS_N        (MENU_COUNT * COPY_N)      /* 18 行 */
+#define COPY_H        (MENU_COUNT * ITEM_H)      /* 单份高度 600 */
 
 typedef struct {
     const char *icon;
@@ -58,6 +54,13 @@ static const menu_item_t items[] = {
 };
 #define MENU_COUNT (sizeof(items) / sizeof(items[0]))
 
+typedef struct {
+    int focus;
+    lv_obj_t *rows[ROWS_N];
+    lv_obj_t *icons[ROWS_N];
+    lv_obj_t *infos[ROWS_N];
+} menu_data_t;
+
 static void menu_anim_width(lv_obj_t *icon, int32_t target)
 {
     int32_t cur = lv_obj_get_width(icon);
@@ -80,27 +83,55 @@ static void menu_set_focus(menu_data_t *d, int idx)
         return;
     }
     d->focus = idx;
-    for (int i = 0; i < (int)MENU_COUNT; i++) {
-        bool f = (i == idx);
-        /* 显式宽度动画: 同图标重复动画自动替换, 快速旋转安全 */
-        menu_anim_width(d->icons[i], f ? ICON_W_FOCUS : ICON_W_OPEN);
-        /* 主题色边: 仅聚焦行, 显式设置(不用状态样式, 杜绝双行残留) */
-        lv_obj_set_style_border_width(d->icons[i], f ? 2 : 0, 0);
-        /* 说明文字仅聚焦行显示 */
-        if (f) {
-            lv_obj_remove_flag(d->infos[i], LV_OBJ_FLAG_HIDDEN);
-        } else {
-            lv_obj_add_flag(d->infos[i], LV_OBJ_FLAG_HIDDEN);
+    for (int k = 0; k < (int)MENU_COUNT; k++) {
+        bool f = (k == idx);
+        /* 三份副本同步(副本像素一致, 循环跳变才无感) */
+        for (int c = 0; c < COPY_N; c++) {
+            int r = c * (int)MENU_COUNT + k;
+            /* 显式宽度动画: 同图标重复动画自动替换, 快速旋转安全 */
+            menu_anim_width(d->icons[r], f ? ICON_W_FOCUS : ICON_W_OPEN);
+            /* 主题色边: 仅聚焦行, 显式设置(不用状态样式) */
+            lv_obj_set_style_border_width(d->icons[r], f ? 2 : 0, 0);
+            /* 说明文字仅聚焦行显示 */
+            if (f) {
+                lv_obj_remove_flag(d->infos[r], LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_add_flag(d->infos[r], LV_OBJ_FLAG_HIDDEN);
+            }
         }
     }
-    /* 滚动跟随焦点: 确保聚焦行完整可见 */
-    lv_obj_scroll_to_view(d->rows[idx], LV_ANIM_ON);
+    /* 滚动跟随焦点: 聚焦行竖直居中(指向中间副本) */
+    lv_obj_t *row = d->rows[MENU_COUNT + idx];
+    lv_obj_t *root = lv_obj_get_parent(row);
+    lv_obj_update_layout(root);
+    int32_t vh = lv_obj_get_height(root);
+    if (vh < ITEM_H) {
+        vh = 3 * ITEM_H;   /* 布局未就绪兜底 */
+    }
+    lv_obj_scroll_to_y(root, lv_obj_get_y(row) - (vh - ITEM_H) / 2, LV_ANIM_ON);
 }
 
-/* 点击列表项 → 进入 (滑动超过阈值不算点击, 防误触发) */
+/* 滚动停止后归位到中间副本区间(上下各留一整份余量):
+ * 副本间像素相同, ANIM_OFF 跳变无感, 实现"首尾相连" */
+static void menu_scroll_wrap_cb(lv_event_t *e)
+{
+    lv_obj_t *root = lv_event_get_target(e);
+    int32_t y = lv_obj_get_scroll_y(root);
+    int32_t ny = y;
+    if (ny < COPY_H) {
+        ny += COPY_H;
+    } else if (ny >= 2 * COPY_H) {
+        ny -= COPY_H;
+    }
+    if (ny != y) {
+        lv_obj_scroll_to_y(root, ny, LV_ANIM_OFF);
+    }
+}
+
+/* 点击列表项 → 进入 (按下记录起点, 滑动超过阈值不算点击) */
 static lv_point_t press_pt;
 
-static void menu_row_pressing_cb(lv_event_t *e)
+static void menu_row_press_cb(lv_event_t *e)
 {
     lv_indev_get_point(lv_indev_active(), &press_pt);
 }
@@ -114,7 +145,7 @@ static void menu_row_cb(lv_event_t *e)
     if (dx * dx + dy * dy > SWIPE_PX * SWIPE_PX) {
         return;   /* 滑动, 不是点击 */
     }
-    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    int idx = (int)(intptr_t)lv_event_get_user_data(e) % (int)MENU_COUNT;
     if (idx < 0 || idx >= (int)MENU_COUNT) {
         return;
     }
@@ -129,25 +160,26 @@ static void pg_menu_create(page_t *p)
     d->focus = 0;
     p->title = "SmartKnob";
 
-    /* 触摸可上下滑动浏览(原模式); 旋转时滚动跟随焦点 */
     lv_obj_set_flex_flow(p->root, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(p->root, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_ver(p->root, ITEM_PAD, 0);
-    /* 滚动条会闪现在右缘, 视觉上像边框线跳到右下角, 直接关掉 */
+    /* 无上下外边距: 18 行纯周期排列, 循环跳变才能像素级无缝 */
     lv_obj_set_scrollbar_mode(p->root, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_add_event_cb(p->root, menu_scroll_wrap_cb, LV_EVENT_SCROLL_END, NULL);
 
-    for (int i = 0; i < (int)MENU_COUNT; i++) {
+    for (int i = 0; i < ROWS_N; i++) {
+        const menu_item_t *it = &items[i % (int)MENU_COUNT];
+
         /* 行容器 */
         lv_obj_t *row = lv_obj_create(p->root);
         lv_obj_remove_style_all(row);
         lv_obj_set_size(row, 220, ITEM_H);
         lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(row, menu_row_pressing_cb, LV_EVENT_PRESSING, (void *)(intptr_t)i);
+        lv_obj_add_event_cb(row, menu_row_press_cb, LV_EVENT_PRESSED, NULL);
         lv_obj_add_event_cb(row, menu_row_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
         d->rows[i] = row;
 
-        /* 左侧图标列 (聚焦收窄 + 右侧蓝紫边, X-Knob signature) */
+        /* 左侧图标列 (聚焦收窄 + 右侧主题边, X-Knob signature) */
         lv_obj_t *icon = lv_obj_create(row);
         lv_obj_remove_style_all(icon);
         lv_obj_set_size(icon, ICON_W_OPEN, ITEM_H);
@@ -163,19 +195,19 @@ static void pg_menu_create(page_t *p)
         lv_obj_t *img = lv_label_create(icon);
         lv_obj_set_style_text_color(img, lv_color_hex(XK_COLOR_TEXT), 0);
         lv_obj_set_style_text_font(img, &lv_font_montserrat_26, 0);
-        lv_label_set_text(img, items[i].icon);
+        lv_label_set_text(img, it->icon);
 
         lv_obj_t *name = lv_label_create(icon);
         lv_obj_set_style_text_color(name, lv_color_hex(XK_COLOR_TEXT), 0);
         lv_obj_set_style_text_font(name, &lv_font_msyh_16, 0);
-        lv_label_set_text(name, items[i].name);
+        lv_label_set_text(name, it->name);
         d->icons[i] = icon;
 
         /* 右侧灰色描述 (仅聚焦行显示) */
         lv_obj_t *info = lv_label_create(row);
         lv_obj_set_style_text_color(info, lv_color_hex(XK_COLOR_GRAY), 0);
         lv_obj_set_style_text_font(info, &lv_font_msyh_16, 0);
-        lv_label_set_text(info, items[i].desc);
+        lv_label_set_text(info, it->desc);
         lv_obj_align(info, LV_ALIGN_LEFT_MID, ICON_W_FOCUS + 10, 0);
         lv_obj_add_flag(info, LV_OBJ_FLAG_HIDDEN);
         d->infos[i] = info;
