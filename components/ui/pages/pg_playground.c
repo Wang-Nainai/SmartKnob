@@ -173,7 +173,7 @@ static void pg_playground_create(page_t *p)
     static lv_point_precise_t needle_points[2] = { {0, 0}, {0, 0} };
     d->needle = lv_line_create(d->scale);
     lv_line_set_points_mutable(d->needle, needle_points, 2);
-    lv_obj_set_style_line_width(d->needle, 8, 0);
+    lv_obj_set_style_line_width(d->needle, 5, 0);
     lv_obj_set_style_line_rounded(d->needle, true, 0);
     lv_obj_set_style_line_color(d->needle, lv_color_hex(XK_COLOR_BLUE), 0);
     lv_scale_set_post_draw(d->scale, true);
@@ -194,11 +194,24 @@ static void pg_playground_create(page_t *p)
     lv_arc_set_bg_angles(d->arc, 0, 0);
     lv_obj_clear_flag(d->arc, LV_OBJ_FLAG_CLICKABLE);
 
-    d->label_value = lv_label_create(p->root);
+    /* 中心旋钮盘(hub): 深色圆盘 + 细边框, 指针从盘心伸出, 数值嵌在盘心
+     * 参考 X-Knob 表盘语言: 外圈刻度环 + 中心实体旋钮 */
+    lv_obj_t *hub = lv_obj_create(p->root);
+    lv_obj_remove_style_all(hub);
+    lv_obj_set_size(hub, 100, 100);
+    lv_obj_set_pos(hub, 70, 120);   /* scale 圆心 (120,170) */
+    lv_obj_set_style_bg_color(hub, lv_color_hex(0x0D0D0D), 0);
+    lv_obj_set_style_bg_opa(hub, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(hub, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_color(hub, lv_color_hex(0x3A3A3A), 0);
+    lv_obj_set_style_border_width(hub, 1, 0);
+    lv_obj_clear_flag(hub, LV_OBJ_FLAG_SCROLLABLE);
+
+    d->label_value = lv_label_create(hub);
     lv_obj_set_style_text_color(d->label_value, lv_color_hex(XK_COLOR_TEXT), 0);
     lv_obj_set_style_text_font(d->label_value, &lv_font_montserrat_48, 0);
     lv_label_set_text(d->label_value, "0");
-    lv_obj_align(d->label_value, LV_ALIGN_CENTER, 0, 60);
+    lv_obj_center(d->label_value);
 
     pg_apply_mode(d);
     d->timer = lv_timer_create(pg_playground_timer, 50, d);

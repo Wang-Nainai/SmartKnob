@@ -302,8 +302,8 @@ static void status_bar_update(void)
     bool m = mqtt_ha_is_connected();
     bool b = blehid_is_connected();
     lv_obj_set_style_text_color(sb_wifi, lv_color_hex(w ? XK_COLOR_GREEN : XK_COLOR_FAINT), 0);
-    lv_obj_set_style_text_color(sb_mqtt, lv_color_hex(m ? XK_COLOR_BLUE : XK_COLOR_FAINT), 0);
-    lv_obj_set_style_text_color(sb_ble, lv_color_hex(b ? XK_COLOR_BLUE : XK_COLOR_FAINT), 0);
+    lv_obj_set_style_text_color(sb_mqtt, lv_color_hex(m ? 0x00C8B4 : XK_COLOR_FAINT), 0);
+    lv_obj_set_style_text_color(sb_ble, lv_color_hex(b ? 0x2E9BFF : XK_COLOR_FAINT), 0);
 
     /* 返回按钮: 仅当页面栈深度 >1 时显示 */
     bool show_back = pm_stack_depth > 1;

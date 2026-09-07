@@ -106,8 +106,7 @@ static void pg_menu_create(page_t *p)
         lv_obj_t *icon = lv_obj_create(row);
         lv_obj_remove_style_all(icon);
         lv_obj_set_size(icon, ICON_W_OPEN, ITEM_H);
-        lv_obj_set_style_bg_color(icon, lv_color_hex(XK_COLOR_BG), 0);
-        lv_obj_set_style_bg_opa(icon, LV_OPA_COVER, 0);
+        /* 背景透明: 与页面同色无需填充, 滚动时大幅减少每帧绘制量 */
         lv_obj_set_style_align(icon, LV_ALIGN_LEFT_MID, 0);
         lv_obj_clear_flag(icon, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_flex_flow(icon, LV_FLEX_FLOW_COLUMN);
@@ -120,11 +119,6 @@ static void pg_menu_create(page_t *p)
         lv_obj_set_style_border_color(icon, lv_color_hex(XK_COLOR_RED), LV_STATE_FOCUSED);
 
         /* 宽度过渡动画 (X-Knob: overshoot 200ms) */
-        static lv_style_transition_dsc_t trans;
-        static const lv_style_prop_t props[] = { LV_STYLE_WIDTH, LV_STYLE_PROP_INV };
-        lv_style_transition_dsc_init(&trans, props, lv_anim_path_ease_out, 120, 0, NULL);
-        lv_obj_set_style_transition(icon, &trans, LV_STATE_FOCUSED);
-        lv_obj_set_style_transition(icon, &trans, 0);
 
         /* 图标 + 名称 (纵向堆叠) */
         lv_obj_t *img = lv_label_create(icon);
