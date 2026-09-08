@@ -56,11 +56,14 @@ static const menu_item_t items[] = {
 
 typedef struct {
     int focus;
-    int cur_row;   /* 上次聚焦动画所居中的行(沿旋转方向连贯滚动用) */
+    int cur_row;      /* 上次聚焦动画所居中的行(沿旋转方向连贯滚动用) */
+    bool anim_lock;   /* 焦点滚动动画进行中: 忽略触摸滚动跟随, 防经过行闪烁 */
     lv_obj_t *rows[ROWS_N];
     lv_obj_t *icons[ROWS_N];
     lv_obj_t *infos[ROWS_N];
 } menu_data_t;
+
+static menu_data_t *s_menu;   /* 单实例 */
 
 static void menu_anim_width(lv_obj_t *icon, int32_t target)
 {
@@ -78,7 +81,8 @@ static void menu_anim_width(lv_obj_t *icon, int32_t target)
     lv_anim_start(&a);
 }
 
-static void menu_set_focus(menu_data_t *d, int idx, int dir)
+/* 焦点视觉切换(宽度动画 + 主题边 + 描述), 不动滚动 */
+static void menu_set_focus_visual(menu_data_t *d, int idx)
 {
     int n = (int)MENU_COUNT;
     if (idx < 0 || idx >= n) {
@@ -102,6 +106,15 @@ static void menu_set_focus(menu_data_t *d, int idx, int dir)
             }
         }
     }
+}
+
+static void menu_set_focus(menu_data_t *d, int idx, int dir)
+{
+    int n = (int)MENU_COUNT;
+    if (idx < 0 || idx >= n) {
+        return;
+    }
+    menu_set_focus_visual(d, idx);
     /* 目标行: 沿旋转方向取相邻副本 —— 系统→S-Dial 也继续向下滚 100px,
      * 全程连贯 (而不是回卷 600px 跳回顶部); 动画结束后由 wrap 归位 */
     int nr = d->cur_row + dir;
@@ -116,7 +129,35 @@ static void menu_set_focus(menu_data_t *d, int idx, int dir)
         vh = 3 * ITEM_H;   /* 布局未就绪兜底 */
     }
     /* 无内外边距: 行顶 = nr*ITEM_H, 聚焦行竖直居中 */
-    lv_obj_scroll_to_y(root, (int32_t)nr * ITEM_H - (vh - ITEM_H) / 2, LV_ANIM_ON);
+    int32_t target = (int32_t)nr * ITEM_H - (vh - ITEM_H) / 2;
+    d->anim_lock = (lv_obj_get_scroll_y(root) != target);
+    lv_obj_scroll_to_y(root, target, LV_ANIM_ON);
+}
+
+/* 触摸滑动: 焦点跟随视觉居中的行 —— 与旋钮一致, 滑动即聚焦导航 */
+static void menu_scroll_follow_cb(lv_event_t *e)
+{
+    menu_data_t *d = lv_event_get_user_data(e);
+    if (d->anim_lock) {
+        return;   /* 焦点动画滚动中不跟随, 防路过的行闪烁 */
+    }
+    lv_obj_t *root = lv_event_get_target(e);
+    int32_t vh = lv_obj_get_height(root);
+    if (vh < ITEM_H) {
+        return;   /* 布局未就绪 */
+    }
+    int32_t y = lv_obj_get_scroll_y(root);
+    int32_t nr = (y + (vh - ITEM_H) / 2 + ITEM_H / 2) / ITEM_H;   /* 最接近视口中心的行 */
+    if (nr < 0) {
+        nr = 0;
+    }
+    if (nr >= ROWS_N) {
+        nr = ROWS_N - 1;
+    }
+    int idx = nr % (int)MENU_COUNT;
+    if (idx != d->focus) {
+        menu_set_focus_visual(d, idx);
+    }
 }
 
 /* 滚动停止后归位到中间副本: 以"首行聚焦居中"的目标 y 为基准带,
@@ -126,6 +167,7 @@ static void menu_set_focus(menu_data_t *d, int idx, int dir)
 static void menu_scroll_wrap_cb(lv_event_t *e)
 {
     menu_data_t *d = lv_event_get_user_data(e);
+    d->anim_lock = false;   /* 焦点滚动动画结束, 恢复触摸跟随 */
     lv_obj_t *root = lv_event_get_target(e);
     int32_t vh = lv_obj_get_height(root);
     if (vh < ITEM_H) {
@@ -162,10 +204,15 @@ static void menu_row_cb(lv_event_t *e)
     if (dx * dx + dy * dy > SWIPE_PX * SWIPE_PX) {
         return;   /* 滑动, 不是点击 */
     }
+    menu_data_t *d = s_menu;
+    if (d == NULL) {
+        return;
+    }
     int idx = (int)(intptr_t)lv_event_get_user_data(e) % (int)MENU_COUNT;
     if (idx < 0 || idx >= (int)MENU_COUNT) {
         return;
     }
+    menu_set_focus_visual(d, idx);   /* 返回时回到点选的行 */
     pm_push(items[idx].page);
     pm_shake();
 }
@@ -174,6 +221,7 @@ static void pg_menu_create(page_t *p)
 {
     menu_data_t *d = calloc(1, sizeof(menu_data_t));
     p->data = d;
+    s_menu = d;
     d->focus = 0;
     p->title = "SmartKnob";
 
@@ -181,6 +229,7 @@ static void pg_menu_create(page_t *p)
     lv_obj_set_flex_align(p->root, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER);
     /* 无上下外边距: 18 行纯周期排列, 循环跳变才能像素级无缝 */
     lv_obj_set_scrollbar_mode(p->root, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_add_event_cb(p->root, menu_scroll_follow_cb, LV_EVENT_SCROLL, d);
     lv_obj_add_event_cb(p->root, menu_scroll_wrap_cb, LV_EVENT_SCROLL_END, d);
 
     for (int i = 0; i < ROWS_N; i++) {
@@ -241,6 +290,7 @@ static void pg_menu_create(page_t *p)
 
 static void pg_menu_destroy(page_t *p)
 {
+    s_menu = NULL;
     free(p->data);
     p->data = NULL;
 }
