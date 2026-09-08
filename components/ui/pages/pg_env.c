@@ -6,6 +6,7 @@
 #include "env_hist.h"
 
 LV_FONT_DECLARE(lv_font_montserrat_14);
+LV_FONT_DECLARE(lv_font_montserrat_16);
 LV_FONT_DECLARE(lv_font_montserrat_26);
 LV_FONT_DECLARE(lv_font_montserrat_48);
 LV_FONT_DECLARE(lv_font_msyh_16);
@@ -50,13 +51,13 @@ static const char *env_level_name(uint16_t co2)
     return "\xE6\x9E\x81\xE6\xAF\x92";                   /* 极毒 */
 }
 
-/* 圆角卡片: 名称 + 数值 (紧凑高度, 给底部趋势图留呼吸空间) */
+/* 圆角卡片: 名称 + 数值 (加宽铺满两侧, 数值字号收敛一档) */
 static void env_card(lv_obj_t *parent, int x, const char *name,
                      lv_obj_t **value_out)
 {
     lv_obj_t *card = lv_obj_create(parent);
     lv_obj_remove_style_all(card);
-    lv_obj_set_size(card, 92, 60);
+    lv_obj_set_size(card, 104, 60);
     lv_obj_set_pos(card, x, 152);
     lv_obj_set_style_bg_color(card, lv_color_hex(XK_COLOR_PANEL), 0);
     lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
@@ -69,16 +70,16 @@ static void env_card(lv_obj_t *parent, int x, const char *name,
     lv_obj_set_style_text_color(nm, lv_color_hex(XK_COLOR_GRAY), 0);
     lv_obj_set_style_text_font(nm, &lv_font_msyh_16, 0);
     lv_label_set_text(nm, name);
-    lv_obj_align(nm, LV_ALIGN_TOP_MID, 0, 4);
+    lv_obj_align(nm, LV_ALIGN_TOP_MID, 0, 8);
 
     lv_obj_t *val = lv_label_create(card);
     lv_obj_set_style_text_color(val, lv_color_hex(XK_COLOR_TEXT), 0);
-    lv_obj_set_style_text_font(val, &lv_font_montserrat_26, 0);
+    lv_obj_set_style_text_font(val, &lv_font_montserrat_16, 0);
     lv_label_set_text(val, "--");
     /* 固定宽度+居中: 数值滚动过渡时新旧文本完全重合, 位数变化不位移 */
-    lv_obj_set_width(val, 84);
+    lv_obj_set_width(val, 96);
     lv_obj_set_style_text_align(val, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(val, LV_ALIGN_BOTTOM_MID, 0, -4);
+    lv_obj_align(val, LV_ALIGN_BOTTOM_MID, 0, -6);
 
     *value_out = val;
 }
@@ -165,7 +166,7 @@ static void pg_env_create(page_t *p)
     lv_obj_set_style_text_color(d->label_value, lv_color_hex(XK_COLOR_GRAY), 0);
     lv_obj_set_style_text_font(d->label_value, &lv_font_montserrat_48, 0);
     lv_label_set_text(d->label_value, "--");
-    lv_obj_set_width(d->label_value, 200);
+    lv_obj_set_width(d->label_value, 216);
     lv_obj_set_style_text_align(d->label_value, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(d->label_value, LV_ALIGN_TOP_MID, 0, 54);
 
@@ -177,8 +178,8 @@ static void pg_env_create(page_t *p)
 
     /* ---- CO2 彩色条(0-5000ppm) ---- */
     d->bar = lv_bar_create(p->root);
-    lv_obj_set_size(d->bar, 200, 8);
-    lv_obj_set_pos(d->bar, 20, 134);
+    lv_obj_set_size(d->bar, 216, 8);
+    lv_obj_set_pos(d->bar, 12, 134);
     lv_bar_set_range(d->bar, 0, 5000);
     lv_bar_set_value(d->bar, 0, LV_ANIM_OFF);
     lv_obj_set_style_radius(d->bar, 4, 0);
@@ -188,14 +189,14 @@ static void pg_env_create(page_t *p)
     lv_obj_set_style_bg_opa(d->bar, LV_OPA_COVER, LV_PART_INDICATOR);
     lv_obj_set_style_radius(d->bar, 4, LV_PART_INDICATOR);
 
-    /* ---- 温度 / 湿度 卡片 ---- */
-    env_card(p->root, 20, "\xE6\xB8\xA9\xE5\xBA\xA6", &d->label_t);
-    env_card(p->root, 128, "\xE6\xB9\xBF\xE5\xBA\xA6", &d->label_h);
+    /* ---- 温度 / 湿度 卡片 (加宽: 12px 边距 + 8px 间隙铺满) ---- */
+    env_card(p->root, 12, "\xE6\xB8\xA9\xE5\xBA\xA6", &d->label_t);
+    env_card(p->root, 124, "\xE6\xB9\xBF\xE5\xBA\xA6", &d->label_h);
 
     /* ---- CO2 趋势图 (2h @ 60s, 数据来自 env_hist) ---- */
     d->chart = lv_chart_create(p->root);
-    lv_obj_set_size(d->chart, 200, 82);
-    lv_obj_set_pos(d->chart, 20, 224);
+    lv_obj_set_size(d->chart, 216, 82);
+    lv_obj_set_pos(d->chart, 12, 224);
     lv_chart_set_type(d->chart, LV_CHART_TYPE_LINE);
     lv_chart_set_point_count(d->chart, ENV_HIST_N);
     lv_chart_set_update_mode(d->chart, LV_CHART_UPDATE_MODE_SHIFT);
