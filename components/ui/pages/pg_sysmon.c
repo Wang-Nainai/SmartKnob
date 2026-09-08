@@ -11,19 +11,21 @@ LV_FONT_DECLARE(lv_font_msyh_16);
  * 系统监控页 (类任务管理器)
  * 点按 = 切换 概览/任务表; 概览页旋转 = 进入任务表; 任务表旋转 = 滚动
  * 数据: sysmon 组件 1Hz 采样(FreeRTOS 运行时统计), 本页 1s 读快照刷新
+ * 任务表渲染: 4 个整列标签(每列一个多行文本), 而非 64 个小标签 ——
+ * 单容器海量子对象会触发 LVGL spec_attr children 管理的堆损坏
  * ============================================================ */
 
-#define TASK_ROWS   16   /* visible rows (virtual scroll window); data cap = SYSMON_MAX_TASKS */
+#define TASK_ROWS   16   /* 可见窗口行数(虚拟滚动); 数据上限 = SYSMON_MAX_TASKS */
 
 typedef struct {
     bool task_list_shown;
-    int scroll_off;                /* task list virtual scroll offset (rows) */
+    int scroll_off;                /* 任务表虚拟滚动偏移(行) */
     lv_obj_t *ov_view;
     lv_obj_t *task_view;
     lv_obj_t *bar[5];                  /* CPU0 CPU1 ALL INT PSRAM */
     lv_obj_t *bar_val[5];
     lv_obj_t *info;
-    lv_obj_t *task_lab[TASK_ROWS][4];  /* 每行: 名称/CPU/栈/核+状态 */
+    lv_obj_t *col_lab[4];              /* 名称/CPU/栈/核+状态 四整列 */
     lv_timer_t *timer;
     sysmon_snapshot_t snap;
 } sysmon_data_t;
@@ -130,7 +132,7 @@ static void pg_sysmon_create(page_t *p)
     lv_label_set_text(tip, "\xE7\x82\xB9\xE5\x87\xBB\xE6\x9F\xA5\xE7\x9C\x8B\xE4\xBB\xBB\xE5\x8A\xA1\xE5\x88\x97\xE8\xA1\xA8");
     lv_obj_align(tip, LV_ALIGN_BOTTOM_MID, 0, -12);
 
-    /* ---- 任务表视图 ---- */
+    /* ---- 任务表视图: 4 个整列标签(多行文本), 不再海量小对象 ---- */
     d->task_view = lv_obj_create(p->root);
     lv_obj_remove_style_all(d->task_view);
     lv_obj_set_size(d->task_view, 240, 320);
@@ -144,47 +146,16 @@ static void pg_sysmon_create(page_t *p)
     lv_label_set_text(head, "TASK         CPU   STK  C ST");
     lv_obj_set_pos(head, 0, 0);
 
-    /* 只创建可见窗口的行控件(虚拟滚动), 避免一次性创建 40x4 个控件
-     * 挤爆内部内存(LVGL 控件堆在内部 SRAM, 实测 160 个 label 直接崩溃) */
-    for (int i = 0; i < TASK_ROWS; i++) {
-        lv_obj_t *l0 = lv_label_create(d->task_view);
-        lv_obj_set_style_text_color(l0, lv_color_hex(XK_COLOR_TEXT), 0);
-        lv_obj_set_style_text_font(l0, &lv_font_montserrat_14, 0);
-        lv_label_set_text(l0, "");
-        lv_obj_set_pos(l0, 0, 20 + i * 18);
-        lv_obj_set_width(l0, 86);
-        lv_label_set_long_mode(l0, LV_LABEL_LONG_DOT);
-
-        lv_obj_t *l1 = lv_label_create(d->task_view);
-        lv_obj_set_style_text_color(l1, lv_color_hex(XK_COLOR_TEXT), 0);
-        lv_obj_set_style_text_font(l1, &lv_font_montserrat_14, 0);
-        lv_label_set_text(l1, "");
-        lv_obj_set_pos(l1, 90, 20 + i * 18);
-        lv_obj_set_width(l1, 42);
-
-        lv_obj_t *l2 = lv_label_create(d->task_view);
-        lv_obj_set_style_text_color(l2, lv_color_hex(XK_COLOR_TEXT), 0);
-        lv_obj_set_style_text_font(l2, &lv_font_montserrat_14, 0);
-        lv_label_set_text(l2, "");
-        lv_obj_set_pos(l2, 134, 20 + i * 18);
-        lv_obj_set_width(l2, 52);
-
-        lv_obj_t *l3 = lv_label_create(d->task_view);
-        lv_obj_set_style_text_color(l3, lv_color_hex(XK_COLOR_TEXT), 0);
-        lv_obj_set_style_text_font(l3, &lv_font_montserrat_14, 0);
-        lv_label_set_text(l3, "");
-        lv_obj_set_pos(l3, 188, 20 + i * 18);
-        lv_obj_set_width(l3, 46);
-
-        lv_obj_add_flag(l0, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(l1, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(l2, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(l3, LV_OBJ_FLAG_HIDDEN);
-
-        d->task_lab[i][0] = l0;
-        d->task_lab[i][1] = l1;
-        d->task_lab[i][2] = l2;
-        d->task_lab[i][3] = l3;
+    static const int col_x[4] = {0, 90, 134, 188};
+    static const int col_w[4] = {86, 42, 52, 46};
+    for (int i = 0; i < 4; i++) {
+        lv_obj_t *l = lv_label_create(d->task_view);
+        lv_obj_set_style_text_color(l, lv_color_hex(XK_COLOR_TEXT), 0);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
+        lv_label_set_text(l, "");
+        lv_obj_set_pos(l, col_x[i], 20);
+        lv_obj_set_width(l, col_w[i]);
+        d->col_lab[i] = l;
     }
 
     d->timer = lv_timer_create(sysmon_timer_cb, 1000, d);
@@ -224,6 +195,39 @@ static void pg_sysmon_on_back(page_t *p)
     pm_pop();
 }
 
+/* 按当前滚动窗口重建 4 列文本 */
+static void sysmon_render_tasks(sysmon_data_t *d)
+{
+    static char c0[TASK_ROWS * 16];
+    static char c1[TASK_ROWS * 8];
+    static char c2[TASK_ROWS * 10];
+    static char c3[TASK_ROWS * 12];
+    sysmon_snapshot_t *s = &d->snap;
+
+    c0[0] = c1[0] = c2[0] = c3[0] = 0;
+    for (int i = 0; i < TASK_ROWS; i++) {
+        int ti = i + d->scroll_off;
+        if (ti >= (int)s->task_count) {
+            break;
+        }
+        snprintf(c0 + strlen(c0), sizeof(c0) - strlen(c0), "%.12s\n", s->tasks[ti].name);
+        snprintf(c1 + strlen(c1), sizeof(c1) - strlen(c1), "%u%%\n", s->tasks[ti].cpu);
+        snprintf(c2 + strlen(c2), sizeof(c2) - strlen(c2), "%lu\n",
+                 (unsigned long)s->tasks[ti].stack_min);
+        if (s->tasks[ti].core < 0) {
+            snprintf(c3 + strlen(c3), sizeof(c3) - strlen(c3), "-  %s\n",
+                     state_str(s->tasks[ti].state));
+        } else {
+            snprintf(c3 + strlen(c3), sizeof(c3) - strlen(c3), "C%d %s\n",
+                     s->tasks[ti].core, state_str(s->tasks[ti].state));
+        }
+    }
+    lv_label_set_text(d->col_lab[0], c0);
+    lv_label_set_text(d->col_lab[1], c1);
+    lv_label_set_text(d->col_lab[2], c2);
+    lv_label_set_text(d->col_lab[3], c3);
+}
+
 static void sysmon_timer_cb(lv_timer_t *t)
 {
     sysmon_data_t *d = (sysmon_data_t *)lv_timer_get_user_data(t);
@@ -259,35 +263,8 @@ static void sysmon_timer_cb(lv_timer_t *t)
              (unsigned)(s->min_free / 1024));
     lv_label_set_text(d->info, buf);
 
-    /* 虚拟滚动: 只渲染可见窗口 */
-    for (int i = 0; i < TASK_ROWS; i++) {
-        lv_obj_t **row = d->task_lab[i];
-        int ti = i + d->scroll_off;
-        if (ti < s->task_count) {
-            char b0[24], b1[12], b2[12], b3[12];
-            snprintf(b0, sizeof(b0), "%.12s", s->tasks[ti].name);
-            snprintf(b1, sizeof(b1), "%u%%", s->tasks[ti].cpu);
-            snprintf(b2, sizeof(b2), "%lu", (unsigned long)s->tasks[ti].stack_min);
-            if (s->tasks[ti].core < 0) {
-                snprintf(b3, sizeof(b3), "-  %s", state_str(s->tasks[ti].state));
-            } else {
-                snprintf(b3, sizeof(b3), "C%d %s", s->tasks[ti].core, state_str(s->tasks[ti].state));
-            }
-            lv_label_set_text(row[0], b0);
-            lv_label_set_text(row[1], b1);
-            lv_label_set_text(row[2], b2);
-            lv_label_set_text(row[3], b3);
-            for (int k = 0; k < 4; k++) {
-                lv_obj_clear_flag(row[k], LV_OBJ_FLAG_HIDDEN);
-            }
-            bool low_stack = s->tasks[ti].stack_min < 1000;
-            lv_obj_set_style_text_color(row[2],
-                lv_color_hex(low_stack ? XK_COLOR_RED : XK_COLOR_TEXT), 0);
-        } else {
-            for (int k = 0; k < 4; k++) {
-                lv_obj_add_flag(row[k], LV_OBJ_FLAG_HIDDEN);
-            }
-        }
+    if (d->task_list_shown) {
+        sysmon_render_tasks(d);
     }
 }
 
