@@ -6,6 +6,7 @@
 #include "env_hist.h"
 #include "widgets/chart/lv_chart_private.h"   /* ser->y_points/start_point 全量重建 */
 
+LV_FONT_DECLARE(lv_font_montserrat_12);
 LV_FONT_DECLARE(lv_font_montserrat_14);
 LV_FONT_DECLARE(lv_font_montserrat_16);
 LV_FONT_DECLARE(lv_font_montserrat_26);
@@ -23,9 +24,12 @@ typedef struct {
     lv_obj_t *bar;          /* CO2 彩色条 */
     lv_obj_t *label_t;      /* 温度值 */
     lv_obj_t *label_h;      /* 湿度值 */
-    lv_obj_t *chart;        /* 趋势图(单击切换度量) */
+    lv_obj_t *chart;        /* 趋势图(单击/旋钮切换度量) */
     lv_chart_series_t *ser;
     lv_obj_t *cap;          /* 图内角标 */
+    lv_obj_t *ax_hi;        /* 左侧刻度: 上/中/下 */
+    lv_obj_t *ax_mid;
+    lv_obj_t *ax_lo;
     uint8_t metric;         /* 0=CO2 1=温度(x10) 2=湿度(x10) */
     uint32_t last_seq;      /* 上次已同步的采样序号 */
     lv_timer_t *timer;
@@ -110,24 +114,89 @@ static void env_metric_clamp(uint8_t metric, int32_t *v)
 {
     if (metric == METRIC_CO2) {
         if (*v < 400) *v = 400;
-        if (*v > 2500) *v = 2500;
+        if (*v > 5000) *v = 5000;
     } else if (metric == METRIC_TEMP) {
-        if (*v < 50) *v = 50;     /* 5.0 C */
-        if (*v > 400) *v = 400;   /* 40.0 C */
+        if (*v < -200) *v = -200;   /* -20.0 C */
+        if (*v > 600) *v = 600;     /* 60.0 C */
     } else {
         if (*v < 0) *v = 0;
-        if (*v > 1000) *v = 1000; /* 100 % */
+        if (*v > 1000) *v = 1000;   /* 100 % */
     }
+}
+
+/* 自适应量程: 按当前缓冲 min/max 自动扩缩并留边距
+ * (湿度是百分比, 天然 0-100 固定; CO2 下限 400; 温度可负)
+ * 这样数据飘出旧量程也不会贴顶削平 */
+static void env_metric_autorange(uint8_t metric, int32_t *lo, int32_t *hi)
+{
+    int cnt = env_hist_count();
+    int32_t mn = INT32_MAX, mx = INT32_MIN;
+    for (int i = 0; i < cnt; i++) {
+        int32_t v = env_metric_value(metric, i);
+        if (v < mn) mn = v;
+        if (v > mx) mx = v;
+    }
+    if (cnt == 0) {
+        mn = 0;
+        mx = 0;
+    }
+    if (metric == METRIC_CO2) {
+        *lo = (mn < 400) ? 400 : mn - 50;
+        *hi = mx + 100;
+        if (*hi - *lo < 400) {
+            *hi = *lo + 400;
+        }
+        if (*hi > 5000) {
+            *hi = 5000;
+        }
+    } else if (metric == METRIC_TEMP) {
+        *lo = mn - 20;
+        *hi = mx + 20;
+        if (*hi - *lo < 60) {
+            int32_t mid = (*hi + *lo) / 2;
+            *lo = mid - 30;
+            *hi = mid + 30;
+        }
+    } else {
+        *lo = 0;
+        *hi = 1000;
+    }
+    env_metric_clamp(metric, lo);
+    env_metric_clamp(metric, hi);
+}
+
+/* 左侧刻度文字: 按度量格式化 (CO2 整数 / 湿度取整 % / 温度一位小数) */
+static void env_axis_label(lv_obj_t *label, uint8_t metric, int32_t v)
+{
+    char buf[14];
+    if (metric == METRIC_CO2) {
+        snprintf(buf, sizeof(buf), "%ld", (long)v);
+    } else if (metric == METRIC_RH) {
+        snprintf(buf, sizeof(buf), "%ld", (long)((v + 5) / 10));
+    } else {
+        int32_t a = (v < 0) ? -v : v;
+        snprintf(buf, sizeof(buf), "%s%ld.%ld", (v < 0) ? "-" : "",
+                 (long)(v / 10), (long)(a % 10));
+    }
+    lv_label_set_text(label, buf);
+}
+
+static void env_metric_set_range(env_data_t *d, int32_t lo, int32_t hi)
+{
+    lv_chart_set_range(d->chart, LV_CHART_AXIS_PRIMARY_Y, lo, hi);
+    env_axis_label(d->ax_hi, d->metric, hi);
+    env_axis_label(d->ax_mid, d->metric, (lo + hi) / 2);
+    env_axis_label(d->ax_lo, d->metric, lo);
 }
 
 /* 按当前度量重配量程/颜色/角标, 并用缓冲全量重建曲线 */
 static void env_metric_apply(env_data_t *d)
 {
     static const uint32_t col_fix[3] = {0, 0x3399FF, 0x00C8B4};
-    static const int32_t rmin[3] = {400, 50, 0};
-    static const int32_t rmax[3] = {2500, 400, 1000};
 
-    lv_chart_set_range(d->chart, LV_CHART_AXIS_PRIMARY_Y, rmin[d->metric], rmax[d->metric]);
+    int32_t lo, hi;
+    env_metric_autorange(d->metric, &lo, &hi);
+    env_metric_set_range(d, lo, hi);
     uint32_t col = (d->metric == METRIC_CO2) ? env_level_color(d->co2)
                                              : col_fix[d->metric];
     lv_chart_set_series_color(d->chart, d->ser, lv_color_hex(col));
@@ -137,7 +206,8 @@ static void env_metric_apply(env_data_t *d)
     for (int id = 0; id < ENV_HIST_N; id++) {
         if (id < cnt) {
             int32_t v = env_metric_value(d->metric, id);
-            env_metric_clamp(d->metric, &v);
+            if (v < lo) v = lo;
+            if (v > hi) v = hi;
             d->ser->y_points[id] = v;
         } else {
             d->ser->y_points[id] = LV_CHART_POINT_NONE;
@@ -190,17 +260,22 @@ static void env_timer_cb(lv_timer_t *t)
         lv_label_set_text(d->label_h, "--");
     }
 
-    /* 趋势图同步: 漏掉几个样本就补几个(补最新的, 按当前度量取值) */
+    /* 趋势图同步: 漏掉几个样本就补几个(补最新的, 按当前度量取值);
+     * 每次有新样本都重算自适应量程, 数据飘出也不会贴顶削平 */
     uint32_t seq = env_hist_seq();
     if (seq != d->last_seq) {
         int cnt = env_hist_count();
         uint32_t diff = seq - d->last_seq;
         d->last_seq = seq;
         if (cnt > 0) {
+            int32_t lo, hi;
+            env_metric_autorange(d->metric, &lo, &hi);
+            env_metric_set_range(d, lo, hi);
             int start = (diff > (uint32_t)cnt) ? cnt : (int)diff;
             for (int k = start; k > 0; k--) {
                 int32_t v = env_metric_value(d->metric, cnt - k);
-                env_metric_clamp(d->metric, &v);
+                if (v < lo) v = lo;
+                if (v > hi) v = hi;
                 lv_chart_set_next_value(d->chart, d->ser, v);
             }
         }
@@ -276,6 +351,7 @@ static void pg_env_create(page_t *p)
     lv_obj_set_style_border_width(d->chart, 1, 0);
     lv_obj_set_style_radius(d->chart, 8, 0);
     lv_obj_set_style_pad_all(d->chart, 2, 0);
+    lv_obj_set_style_pad_left(d->chart, 28, 0);   /* 左侧留刻度栏 */
     lv_obj_set_style_line_color(d->chart, lv_color_hex(XK_COLOR_BORDER), LV_PART_MAIN);
 
     d->ser = lv_chart_add_series(d->chart, lv_color_hex(0x00C864), LV_CHART_AXIS_PRIMARY_Y);
@@ -289,8 +365,22 @@ static void pg_env_create(page_t *p)
     lv_obj_set_style_text_color(cap, lv_color_hex(XK_COLOR_FAINT), 0);
     lv_obj_set_style_text_font(cap, &lv_font_montserrat_14, 0);
     lv_label_set_text(cap, metric_caption[METRIC_CO2]);
-    lv_obj_align(cap, LV_ALIGN_TOP_LEFT, 4, 2);
+    lv_obj_align(cap, LV_ALIGN_TOP_LEFT, 30, 2);
     d->cap = cap;
+
+    /* 左侧 Y 轴刻度 (上/中/下, 随自适应量程刷新) */
+    static const lv_align_t ax_align[3] = {LV_ALIGN_TOP_LEFT, LV_ALIGN_LEFT_MID, LV_ALIGN_BOTTOM_LEFT};
+    lv_obj_t **ax_out[3] = {&d->ax_hi, &d->ax_mid, &d->ax_lo};
+    for (int i = 0; i < 3; i++) {
+        lv_obj_t *lb = lv_label_create(d->chart);
+        lv_obj_set_style_text_color(lb, lv_color_hex(XK_COLOR_FAINT), 0);
+        lv_obj_set_style_text_font(lb, &lv_font_montserrat_12, 0);
+        lv_label_set_text(lb, "--");
+        lv_obj_align(lb, ax_align[i], 1, 0);
+        lv_obj_set_width(lb, 25);
+        lv_obj_set_style_text_align(lb, LV_TEXT_ALIGN_CENTER, 0);
+        *ax_out[i] = lb;
+    }
 
     /* 单击循环切换 CO2/温度/湿度 曲线 */
     lv_obj_add_flag(d->chart, LV_OBJ_FLAG_CLICKABLE);
