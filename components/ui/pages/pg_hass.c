@@ -8,17 +8,20 @@ LV_FONT_DECLARE(lv_font_montserrat_26);
 LV_FONT_DECLARE(lv_font_msyh_16);
 
 /* ============================================================
- * X-Knob 风格智能家居页
- * - 设备列表: 与主菜单同款"聚焦展开"行
+ * X-Knob 风格智能家居页 (无限循环, 与主菜单同架构)
+ * - 4 设备 x 3 副本环形列表, 触摸可滑, 焦点跟随, 旋转连贯循环
  * - 控制视图: 全屏表盘(73 刻度 360°, 蓝色指针)
  *   旋转 = LEFT/RIGHT, 点击 = ON/OFF
  * ============================================================ */
 
 #define HASS_DEVICE_NUM 4
-#define ROW_H 70
-#define LIST_PAD ((320 - ROW_H) / 2)
+#define COPY_N        3
+#define ROWS_N        (HASS_DEVICE_NUM * COPY_N)
+#define ITEM_H        100
 #define ICON_W_OPEN   220
 #define ICON_W_FOCUS  70
+#define ANIM_MS       180
+#define SWIPE_PX      20
 
 static const char *device_names[HASS_DEVICE_NUM] = {
     "\xE7\x81\xAF\xE5\x85\x89",   /* 灯光 */
@@ -28,18 +31,21 @@ static const char *device_names[HASS_DEVICE_NUM] = {
 };
 
 static const char *device_icons[HASS_DEVICE_NUM] = {
-    LV_SYMBOL_BELL,        /* 灯光 */
-    LV_SYMBOL_SETTINGS,    /* 空调 */
-    LV_SYMBOL_CHARGE,      /* 风扇 */
-    LV_SYMBOL_LOOP,        /* 洗衣机 */
+    LV_SYMBOL_POWER,    /* 灯光: 电源/开关 */
+    LV_SYMBOL_TINT,     /* 空调: 冷凝水滴 */
+    LV_SYMBOL_REFRESH,  /* 风扇: 旋转叶片 */
+    LV_SYMBOL_LOOP,     /* 洗衣机: 滚筒循环 */
 };
 
 typedef struct {
     int focus;
+    int cur_row;
+    bool anim_lock;
     bool in_control;
-    lv_obj_t *list;         /* 设备列表滚动容器 */
-    lv_obj_t *rows[HASS_DEVICE_NUM];
-    lv_obj_t *icons[HASS_DEVICE_NUM];
+    lv_obj_t *list;
+    lv_obj_t *rows[ROWS_N];
+    lv_obj_t *icons[ROWS_N];
+    lv_obj_t *infos[ROWS_N];
     lv_obj_t *ctrl_scr;     /* 控制视图 */
     lv_obj_t *scale;        /* 控制视图表盘 */
     lv_obj_t *needle;
@@ -48,19 +54,116 @@ typedef struct {
     lv_timer_t *timer;
 } hass_data_t;
 
-static void hass_set_focus(hass_data_t *d, int idx)
+static hass_data_t *s_hass;   /* 行回调取实例用 (单实例页面) */
+
+static void hass_anim_width(lv_obj_t *icon, int32_t target)
+{
+    int32_t cur = lv_obj_get_width(icon);
+    if (cur == target) {
+        return;
+    }
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, icon);
+    lv_anim_set_exec_cb(&a, (lv_anim_exec_xcb_t)lv_obj_set_width);
+    lv_anim_set_values(&a, cur, target);
+    lv_anim_set_duration(&a, ANIM_MS);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+    lv_anim_start(&a);
+}
+
+/* 焦点视觉切换 (宽度动画 + 主题边 + 右侧信息), 不动滚动 */
+static void hass_focus_visual(hass_data_t *d, int idx)
 {
     if (idx < 0 || idx >= HASS_DEVICE_NUM) {
         return;
     }
-    for (int i = 0; i < HASS_DEVICE_NUM; i++) {
-        if (i == idx) {
-            lv_obj_add_state(d->icons[i], LV_STATE_FOCUSED);
-        } else {
-            lv_obj_remove_state(d->icons[i], LV_STATE_FOCUSED);
+    d->focus = idx;
+    for (int k = 0; k < HASS_DEVICE_NUM; k++) {
+        bool f = (k == idx);
+        for (int c = 0; c < COPY_N; c++) {
+            int r = c * HASS_DEVICE_NUM + k;
+            hass_anim_width(d->icons[r], f ? ICON_W_FOCUS : ICON_W_OPEN);
+            lv_obj_set_style_border_width(d->icons[r], f ? 2 : 0, 0);
+            if (f) {
+                lv_obj_remove_flag(d->infos[r], LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_add_flag(d->infos[r], LV_OBJ_FLAG_HIDDEN);
+            }
         }
     }
-    lv_obj_scroll_to_view(d->rows[idx], LV_ANIM_ON);
+}
+
+static void hass_set_focus(hass_data_t *d, int idx, int dir)
+{
+    if (idx < 0 || idx >= HASS_DEVICE_NUM) {
+        return;
+    }
+    hass_focus_visual(d, idx);
+    int nr = d->cur_row + dir;
+    if (dir == 0 || nr < 0 || nr >= ROWS_N || (nr % HASS_DEVICE_NUM) != idx) {
+        nr = HASS_DEVICE_NUM + idx;
+    }
+    d->cur_row = nr;
+    lv_obj_t *root = lv_obj_get_parent(d->rows[nr]);
+    lv_obj_update_layout(root);
+    int32_t vh = lv_obj_get_height(root);
+    if (vh < ITEM_H) {
+        vh = 3 * ITEM_H;
+    }
+    int32_t target = (int32_t)nr * ITEM_H - (vh - ITEM_H) / 2;
+    d->anim_lock = (lv_obj_get_scroll_y(root) != target);
+    lv_obj_scroll_to_y(root, target, LV_ANIM_ON);
+}
+
+/* 触摸滑动: 焦点跟随视觉居中的行 */
+static void hass_scroll_follow_cb(lv_event_t *e)
+{
+    hass_data_t *d = lv_event_get_user_data(e);
+    if (d->anim_lock || d->in_control) {
+        return;
+    }
+    lv_obj_t *root = lv_event_get_target(e);
+    int32_t vh = lv_obj_get_height(root);
+    if (vh < ITEM_H) {
+        return;
+    }
+    int32_t y = lv_obj_get_scroll_y(root);
+    int32_t nr = (y + (vh - ITEM_H) / 2 + ITEM_H / 2) / ITEM_H;
+    if (nr < 0) {
+        nr = 0;
+    }
+    if (nr >= ROWS_N) {
+        nr = ROWS_N - 1;
+    }
+    int idx = nr % HASS_DEVICE_NUM;
+    if (idx != d->focus) {
+        hass_focus_visual(d, idx);
+    }
+}
+
+/* 滚动停止后归位中间副本 (像素相同, 跳变无感) */
+static void hass_scroll_wrap_cb(lv_event_t *e)
+{
+    hass_data_t *d = lv_event_get_user_data(e);
+    d->anim_lock = false;
+    lv_obj_t *root = lv_event_get_target(e);
+    int32_t vh = lv_obj_get_height(root);
+    if (vh < ITEM_H) {
+        vh = 3 * ITEM_H;
+    }
+    int32_t base = (int32_t)HASS_DEVICE_NUM * ITEM_H - (vh - ITEM_H) / 2;
+    int32_t y = lv_obj_get_scroll_y(root);
+    int32_t ny = y;
+    if (ny >= base + HASS_DEVICE_NUM * ITEM_H) {
+        ny -= HASS_DEVICE_NUM * ITEM_H;
+    } else if (ny < base) {
+        ny += HASS_DEVICE_NUM * ITEM_H;
+    }
+    d->cur_row = HASS_DEVICE_NUM + d->focus;
+    if (ny != y) {
+        lv_obj_scroll_to_y(root, ny, LV_ANIM_OFF);
+    }
 }
 
 static void hass_show_control(hass_data_t *d, bool ctrl)
@@ -79,15 +182,29 @@ static void hass_show_control(hass_data_t *d, bool ctrl)
     }
 }
 
-/* 点击设备行 → 控制视图 */
+/* 点击设备行 → 控制视图 (滑动 >20px 不算点击) */
+static lv_point_t press_pt;
+
+static void hass_row_press_cb(lv_event_t *e)
+{
+    lv_indev_get_point(lv_indev_active(), &press_pt);
+}
+
 static void hass_row_cb(lv_event_t *e)
 {
-    lv_obj_t *row = lv_event_get_current_target(e);
-    page_t *p = (page_t *)lv_obj_get_user_data(row);
-    hass_data_t *d = p->data;
-    int idx = (int)(intptr_t)lv_event_get_user_data(e);
-    d->focus = idx;
-    hass_set_focus(d, idx);
+    lv_point_t now;
+    lv_indev_get_point(lv_indev_active(), &now);
+    int dx = now.x - press_pt.x;
+    int dy = now.y - press_pt.y;
+    if (dx * dx + dy * dy > SWIPE_PX * SWIPE_PX) {
+        return;   /* 滑动, 不是点击 */
+    }
+    hass_data_t *d = s_hass;
+    if (d == NULL || d->in_control) {
+        return;
+    }
+    int idx = (int)(intptr_t)lv_event_get_user_data(e) % HASS_DEVICE_NUM;
+    hass_focus_visual(d, idx);
     hass_show_control(d, true);
     pm_shake();
 }
@@ -120,6 +237,7 @@ static void pg_hass_create(page_t *p)
 {
     hass_data_t *d = calloc(1, sizeof(hass_data_t));
     p->data = d;
+    s_hass = d;
     d->focus = 0;
     d->in_control = false;
     p->title = "\xE6\x99\xBA\xE8\x83\xBD\xE5\xAE\xB6\xE5\xB1\x85";
@@ -130,57 +248,60 @@ static void pg_hass_create(page_t *p)
     lv_obj_set_size(list, 240, 320);
     lv_obj_set_pos(list, 0, 0);
     d->list = list;
+    /* 无内外边距: 12 行纯周期排列, 循环跳变才能像素级无缝 */
     lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_ver(list, LIST_PAD, 0);
+    lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_add_event_cb(list, hass_scroll_follow_cb, LV_EVENT_SCROLL, d);
+    lv_obj_add_event_cb(list, hass_scroll_wrap_cb, LV_EVENT_SCROLL_END, d);
 
-    for (int i = 0; i < HASS_DEVICE_NUM; i++) {
+    for (int i = 0; i < ROWS_N; i++) {
+        int k = i % HASS_DEVICE_NUM;
+
         lv_obj_t *row = lv_obj_create(list);
         lv_obj_remove_style_all(row);
-        lv_obj_set_size(row, 220, ROW_H);
+        lv_obj_set_size(row, 220, ITEM_H);
         lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_set_user_data(row, p);
+        lv_obj_add_event_cb(row, hass_row_press_cb, LV_EVENT_PRESSED, NULL);
         lv_obj_add_event_cb(row, hass_row_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
         d->rows[i] = row;
 
         lv_obj_t *icon = lv_obj_create(row);
         lv_obj_remove_style_all(icon);
-        lv_obj_set_size(icon, ICON_W_OPEN, ROW_H);
+        lv_obj_set_size(icon, ICON_W_OPEN, ITEM_H);
         lv_obj_set_style_bg_color(icon, lv_color_hex(XK_COLOR_BG), 0);
         lv_obj_set_style_bg_opa(icon, LV_OPA_COVER, 0);
+        /* 图标默认 CLICKABLE 且铺满整行, 会吞掉行点击 —— 必须关闭 */
+        lv_obj_clear_flag(icon, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_style_align(icon, LV_ALIGN_LEFT_MID, 0);
         lv_obj_clear_flag(icon, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_set_flex_flow(icon, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_flow(icon, LV_FLEX_FLOW_COLUMN);
         lv_obj_set_flex_align(icon, LV_FLEX_ALIGN_SPACE_AROUND, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-        lv_obj_set_style_width(icon, ICON_W_FOCUS, LV_STATE_FOCUSED);
-        lv_obj_set_style_border_side(icon, LV_BORDER_SIDE_RIGHT, LV_STATE_FOCUSED);
-        lv_obj_set_style_border_width(icon, 2, LV_STATE_FOCUSED);
-        lv_obj_set_style_border_color(icon, lv_color_hex(XK_COLOR_ACCENT), LV_STATE_FOCUSED);
-
-        static lv_style_transition_dsc_t trans;
-        static const lv_style_prop_t props[] = { LV_STYLE_WIDTH, LV_STYLE_PROP_INV };
-        lv_style_transition_dsc_init(&trans, props, lv_anim_path_overshoot, 200, 0, NULL);
-        lv_obj_set_style_transition(icon, &trans, LV_STATE_FOCUSED);
-        lv_obj_set_style_transition(icon, &trans, 0);
+        lv_obj_set_style_border_side(icon, LV_BORDER_SIDE_RIGHT, 0);
+        lv_obj_set_style_border_color(icon, lv_color_hex(XK_COLOR_ACCENT), 0);
+        lv_obj_set_style_border_post(icon, true, 0);
 
         lv_obj_t *img = lv_label_create(icon);
         lv_obj_set_style_text_color(img, lv_color_hex(XK_COLOR_TEXT), 0);
         lv_obj_set_style_text_font(img, &lv_font_montserrat_26, 0);
-        lv_label_set_text(img, device_icons[i]);
+        lv_label_set_text(img, device_icons[k]);
 
         lv_obj_t *name = lv_label_create(icon);
         lv_obj_set_style_text_color(name, lv_color_hex(XK_COLOR_TEXT), 0);
         lv_obj_set_style_text_font(name, &lv_font_msyh_16, 0);
-        lv_label_set_text(name, device_names[i]);
+        lv_label_set_text(name, device_names[k]);
         d->icons[i] = icon;
 
         lv_obj_t *info = lv_label_create(row);
         lv_obj_set_style_text_color(info, lv_color_hex(XK_COLOR_GRAY), 0);
         lv_obj_set_style_text_font(info, &lv_font_msyh_16, 0);
         lv_label_set_text(info, "\xE7\x82\xB9\xE5\x87\xBB\xE6\x8E\xA7\xE5\x88\xB6");
-        lv_obj_align(info, LV_ALIGN_LEFT_MID, ICON_W_FOCUS + 5, 0);
+        lv_obj_set_width(info, 132);
+        lv_obj_set_style_text_align(info, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_align(info, LV_ALIGN_LEFT_MID, ICON_W_FOCUS + 10, 0);
+        lv_obj_add_flag(info, LV_OBJ_FLAG_HIDDEN);
+        d->infos[i] = info;
 
         lv_obj_move_foreground(icon);
     }
@@ -242,11 +363,12 @@ static void pg_hass_create(page_t *p)
 
     d->timer = lv_timer_create(hass_timer_cb, 50, d);
     motor_set_mode(MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
-    hass_set_focus(d, 0);
+    hass_set_focus(d, 0, 0);
 }
 
 static void pg_hass_destroy(page_t *p)
 {
+    s_hass = NULL;
     hass_data_t *d = p->data;
     if (d) {
         if (d->timer) lv_timer_del(d->timer);
@@ -271,11 +393,9 @@ static void pg_hass_on_rotate(page_t *p, int32_t steps)
         lv_label_set_text(d->label_last, steps > 0 ? "RIGHT" : "LEFT");
         pm_shake();
     } else {
-        d->focus = (d->focus + steps) % HASS_DEVICE_NUM;
-        if (d->focus < 0) {
-            d->focus += HASS_DEVICE_NUM;
-        }
-        hass_set_focus(d, d->focus);
+        /* 无级循环: 灯光->空调->风扇->洗衣机->灯光... */
+        d->focus = ((d->focus + steps) % HASS_DEVICE_NUM + HASS_DEVICE_NUM) % HASS_DEVICE_NUM;
+        hass_set_focus(d, d->focus, (int)steps);
     }
 }
 
@@ -294,6 +414,9 @@ static void pg_hass_on_resume(page_t *p)
     hass_data_t *d = p->data;
     motor_set_mode(d->in_control ? MOTOR_MODE_UNBOUND_NO_DETENTS
                                  : MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
+    if (!d->in_control) {
+        hass_set_focus(d, d->focus, 0);
+    }
 }
 
 static void pg_hass_on_tick(page_t *p)

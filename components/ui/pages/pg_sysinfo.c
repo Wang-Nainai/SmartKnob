@@ -9,17 +9,24 @@
 #include "esp_timer.h"
 
 LV_FONT_DECLARE(lv_font_msyh_16);
+LV_FONT_DECLARE(lv_font_montserrat_12);
+
+/* ============================================================
+ * 系统信息页
+ * - 8 行: 名称(左) + 值(右, montserrat_12 限宽防叠加)
+ * - 底部工厂测试入口整行可触摸
+ * ============================================================ */
+
+#define SYSINFO_ROWS 8
 
 typedef struct {
-    lv_obj_t *val[8];
+    lv_obj_t *val[SYSINFO_ROWS];
 } sysinfo_data_t;
 
 /* 工厂测试入口点击 → 进入工厂测试页 */
 static void sysinfo_factory_cb(lv_event_t *e)
 {
-    lv_obj_t *obj = lv_event_get_current_target(e);
-    page_t *p = (page_t *)lv_obj_get_user_data(obj);
-    (void)p;
+    (void)e;
     pm_push(PAGE_FACTORY);
     pm_shake();
 }
@@ -66,19 +73,20 @@ static void pg_sysinfo_create(page_t *p)
     p->data = d;
     p->title = "\xE7\xB3\xBB\xE7\xBB\x9F";
 
-    static const char *labels[8] = {
+    static const char *labels[SYSINFO_ROWS] = {
         "VERSION",
         "IP",
         "MQTT",
         "UPTIME",
-        "SCREEN OFF",
+        "SLEEP",
         "BUILD",
         "WEB CFG",
         "\xE5\xB7\xA5\xE5\x8E\x82\xE6\xB5\x8B\xE8\xAF\x95",  /* 工厂测试 */
     };
-    static const int ys[8] = { 40, 76, 112, 148, 184, 220, 256, 292 };
+    /* 行距收紧: 8 行全部放下, 值列限宽+小字体防长字段叠加 */
+    static const int ys[SYSINFO_ROWS] = { 30, 63, 96, 129, 162, 195, 228, 264 };
 
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < SYSINFO_ROWS; i++) {
         lv_obj_t *l = lv_label_create(p->root);
         lv_obj_set_style_text_color(l, lv_color_hex(XK_COLOR_GRAY), 0);
         lv_obj_set_style_text_font(l, &lv_font_msyh_16, 0);
@@ -87,18 +95,21 @@ static void pg_sysinfo_create(page_t *p)
 
         lv_obj_t *v = lv_label_create(p->root);
         lv_obj_set_style_text_color(v, lv_color_hex(XK_COLOR_TEXT), 0);
-        lv_obj_set_style_text_font(v, &lv_font_msyh_16, 0);
+        lv_obj_set_style_text_font(v, &lv_font_montserrat_12, 0);
         lv_label_set_text(v, "");
-        lv_obj_align(v, LV_ALIGN_TOP_RIGHT, -14, ys[i]);
+        lv_label_set_long_mode(v, LV_LABEL_LONG_DOT);
+        lv_obj_set_width(v, 118);
+        lv_obj_set_style_text_align(v, LV_TEXT_ALIGN_RIGHT, 0);
+        lv_obj_align(v, LV_ALIGN_TOP_RIGHT, -14, ys[i] + 2);
         d->val[i] = v;
     }
 
     /* 工厂测试入口: 整行可触摸 */
-    lv_obj_t *entry = lv_label_create(p->root);
-    lv_obj_set_size(entry, 240, 28);
-    lv_obj_set_pos(entry, 0, ys[7]);
+    lv_obj_t *entry = lv_obj_create(p->root);
+    lv_obj_remove_style_all(entry);
+    lv_obj_set_size(entry, 240, 30);
+    lv_obj_set_pos(entry, 0, ys[7] - 4);
     lv_obj_add_flag(entry, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_user_data(entry, p);
     lv_obj_add_event_cb(entry, sysinfo_factory_cb, LV_EVENT_CLICKED, NULL);
 
     lv_obj_remove_flag(p->root, LV_OBJ_FLAG_SCROLLABLE);
