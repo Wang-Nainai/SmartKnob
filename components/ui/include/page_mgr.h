@@ -36,6 +36,9 @@ typedef struct {
     void (*on_back)(page_t *p);
     void (*on_tick)(page_t *p);
     void (*on_resume)(page_t *p);
+    /* 返回 true 时禁用"快速逆时针甩动返回"手势
+     * (编辑/控制子模式下快转是合法的值输入, 如亮度调节/音量) */
+    bool (*flick_block)(page_t *p);
 } page_ops_t;
 
 typedef struct page {

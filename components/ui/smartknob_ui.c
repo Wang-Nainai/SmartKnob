@@ -576,6 +576,9 @@ static bool flick_back_check(page_t *top, int32_t steps)
     if (pm_stack_depth <= 1) {
         return false;               /* 主菜单没有可返回的层 */
     }
+    if (top->ops->flick_block && top->ops->flick_block(top)) {
+        return false;               /* 页面子模式(编辑/控制)中, 快转是值输入 */
+    }
     if (top->ops->on_back == NULL || !flick_back_allowed(top)) {
         return false;
     }

@@ -495,6 +495,13 @@ static void pg_setting_on_rotate(page_t *p, int32_t steps)
     /* 编辑模式: 值由电机档位控制, timer 读取 */
 }
 
+/* 编辑模式中快转是调值输入, 禁用甩动返回手势 */
+static bool setting_flick_block(page_t *p)
+{
+    setting_data_t *d = p->data;
+    return d->edit_item >= 0;
+}
+
 static void pg_setting_on_back(page_t *p)
 {
     setting_data_t *d = p->data;
@@ -529,4 +536,5 @@ const page_ops_t pg_setting_ops = {
     .on_back = pg_setting_on_back,
     .on_tick = pg_setting_on_tick,
     .on_resume = pg_setting_on_resume,
+    .flick_block = setting_flick_block,
 };

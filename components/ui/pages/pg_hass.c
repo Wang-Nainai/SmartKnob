@@ -399,6 +399,13 @@ static void pg_hass_on_rotate(page_t *p, int32_t steps)
     }
 }
 
+/* 控制视图中快转是 LEFT/RIGHT 输入, 禁用甩动返回手势 */
+static bool hass_flick_block(page_t *p)
+{
+    hass_data_t *d = p->data;
+    return d->in_control;
+}
+
 static void pg_hass_on_back(page_t *p)
 {
     hass_data_t *d = p->data;
@@ -430,4 +437,5 @@ const page_ops_t pg_hass_ops = {
     .on_back = pg_hass_on_back,
     .on_tick = pg_hass_on_tick,
     .on_resume = pg_hass_on_resume,
+    .flick_block = hass_flick_block,
 };
