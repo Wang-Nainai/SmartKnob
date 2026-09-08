@@ -257,9 +257,11 @@ static const char page_html[] =
     "for(const[nm,arr,col,dv]of S){"
     "if(!arr||!arr.length){lg.push(nm+' -');continue}"
     "let mn=Math.min(...arr),mx=Math.max(...arr);if(mx===mn)mx=mn+1;"
+    "const pts=arr.map((v,i)=>[arr.length>1?i/(arr.length-1)*(W-4)+2:2,H-6-(v-mn)/(mx-mn)*(H-16)]);"
     "c.strokeStyle=col;c.lineWidth=1.6;c.beginPath();"
-    "arr.forEach((v,i)=>{const x=arr.length>1?i/(arr.length-1)*(W-4)+2:2;"
-    "const y=H-6-(v-mn)/(mx-mn)*(H-16);i?c.lineTo(x,y):c.moveTo(x,y)});c.stroke();"
+    "pts.forEach((p,i)=>{i?c.lineTo(p[0],p[1]):c.moveTo(p[0],p[1])});c.stroke();"
+    /* 稀疏数据画圆点: 24h 缓冲 5min/点, 刷机后点少时也能看见 */
+    "if(arr.length<30){c.fillStyle=col;pts.forEach(p=>{c.beginPath();c.arc(p[0],p[1],2.2,0,6.3);c.fill()})}"
     "const last=arr[arr.length-1];"
     "lg.push(nm+' '+(last/dv)+(nm=='CO2'?'ppm':'')+' ('+(mn/dv)+'~'+(mx/dv)+')')}"
     "document.getElementById('envlg').textContent=lg.join('    ');"

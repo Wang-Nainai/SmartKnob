@@ -59,6 +59,19 @@ void env_hist_push_if_due(uint16_t co2_ppm, float temp_c, float rh_pct)
 
     if (now - s_hist->last_day_us >= (int64_t)ENV_DAY_MS * 1000) {
         s_hist->last_day_us = now;
+        /* 开机首点: 先用 2h 高分缓冲回填, web 立即有曲线可看
+         * (否则 5min 一个点, 刷机后前半小时画布近乎全空) */
+        if (s_hist->day_count == 0) {
+            for (int i = 0; i < s_hist->count && s_hist->day_count < ENV_DAY_N; i++) {
+                int idx = (s_hist->head - s_hist->count + i + ENV_HIST_N * 2) % ENV_HIST_N;
+                s_hist->day_co2[s_hist->day_head] = s_hist->co2[idx];
+                s_hist->day_temp_x10[s_hist->day_head] = s_hist->temp_x10[idx];
+                s_hist->day_rh_x10[s_hist->day_head] = s_hist->rh_x10[idx];
+                s_hist->day_head = (s_hist->day_head + 1) % ENV_DAY_N;
+                s_hist->day_count++;
+                s_hist->day_seq++;
+            }
+        }
         s_hist->day_co2[s_hist->day_head] = co2_ppm;
         s_hist->day_temp_x10[s_hist->day_head] = t10;
         s_hist->day_rh_x10[s_hist->day_head] = r10;
