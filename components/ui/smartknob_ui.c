@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string.h>
 #include <time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -105,6 +106,83 @@ static void anim_opa_cb(void *obj, int32_t v)
 static void anim_x_cb(void *obj, int32_t v)
 {
     lv_obj_set_x((lv_obj_t *)obj, v);
+}
+
+/* ---------------- 数值滚动动画 (X-Knob lv_label_anim_effect 简化版) ----------------
+ * 文本变化时: 旧文本作为"幽灵"标签下滑淡出, 新文本自上方滑入。
+ * 幽灵挂在被更新的标签之下 —— 标签销毁时随之销毁, 无悬挂指针;
+ * 上下平移用 translate_y 样式动画, 不干扰标签原布局对齐。 */
+static void roll_translate_cb(void *obj, int32_t v)
+{
+    lv_obj_set_style_translate_y((lv_obj_t *)obj, v, 0);
+}
+
+static void roll_ghost_done(lv_anim_t *a)
+{
+    lv_obj_t *ghost = (lv_obj_t *)a->var;
+    lv_obj_t *label = (lv_obj_t *)a->user_data;
+    if (label && (lv_obj_t *)lv_obj_get_user_data(label) == ghost) {
+        lv_obj_set_user_data(label, NULL);
+    }
+    lv_obj_delete(ghost);
+}
+
+void ui_label_roll(lv_obj_t *label, const char *text)
+{
+    if (!label || !text) {
+        return;
+    }
+    const char *old = lv_label_get_text(label);
+    if (old && strcmp(old, text) == 0) {
+        return;
+    }
+
+    /* 上一次的幽灵还在飞: 立即移除(连续快速刷新时旧文本瞬间消失) */
+    lv_obj_t *ghost = (lv_obj_t *)lv_obj_get_user_data(label);
+    if (ghost) {
+        lv_obj_set_user_data(label, NULL);
+        lv_obj_delete(ghost);
+    }
+
+    ghost = lv_label_create(label);
+    lv_obj_set_pos(ghost, 0, 0);
+    lv_obj_set_style_text_color(ghost, lv_obj_get_style_text_color(label, 0), 0);
+    lv_obj_set_style_text_font(ghost, lv_obj_get_style_text_font(label, 0), 0);
+    lv_label_set_text(ghost, old ? old : "");
+    lv_obj_set_user_data(label, ghost);
+
+    /* 新文本: 自上方滑入 */
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, label);
+    lv_anim_set_exec_cb(&a, roll_translate_cb);
+    lv_anim_set_values(&a, -10, 0);
+    lv_anim_set_duration(&a, 250);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+    lv_anim_start(&a);
+
+    /* 旧文本: 下滑淡出后删除 */
+    lv_anim_t b;
+    lv_anim_init(&b);
+    lv_anim_set_var(&b, ghost);
+    lv_anim_set_exec_cb(&b, roll_translate_cb);
+    lv_anim_set_values(&b, 0, 12);
+    lv_anim_set_duration(&b, 250);
+    lv_anim_set_path_cb(&b, lv_anim_path_ease_in);
+    lv_anim_set_user_data(&b, label);
+    lv_anim_set_ready_cb(&b, roll_ghost_done);
+    lv_anim_start(&b);
+
+    lv_anim_t c;
+    lv_anim_init(&c);
+    lv_anim_set_var(&c, ghost);
+    lv_anim_set_exec_cb(&c, anim_opa_cb);
+    lv_anim_set_values(&c, LV_OPA_COVER, 0);
+    lv_anim_set_duration(&c, 250);
+    lv_anim_set_path_cb(&c, lv_anim_path_ease_in);
+    lv_anim_start(&c);
+
+    lv_label_set_text(label, text);
 }
 
 static void pm_delete_page(page_t *p)
@@ -296,7 +374,7 @@ static void status_bar_update(void)
     } else {
         snprintf(buf, sizeof(buf), "--:--");
     }
-    lv_label_set_text(sb_time, buf);
+    ui_label_roll(sb_time, buf);   /* 分钟变化时数字滚动 */
 
     bool w = wifi_is_connected();
     bool m = mqtt_ha_is_connected();
