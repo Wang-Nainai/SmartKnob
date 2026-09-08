@@ -279,12 +279,14 @@ static const char page_html[] =
 
 static esp_err_t handler_root(httpd_req_t *req)
 {
+    ESP_LOGI(TAG, "HTTP GET %s", req->uri);
     httpd_resp_set_type(req, "text/html");
     return httpd_resp_send(req, page_html, HTTPD_RESP_USE_STRLEN);
 }
 
 static esp_err_t handler_status(httpd_req_t *req)
 {
+    ESP_LOGI(TAG, "HTTP GET %s", req->uri);
     char buf[1024];
     const esp_app_desc_t *app = esp_app_get_description();
     uint32_t uptime_s = esp_timer_get_time() / 1000000ULL;
@@ -336,6 +338,7 @@ static esp_err_t handler_status(httpd_req_t *req)
  * 体积 ~5KB, 用 chunked 发送避免大响应缓冲 */
 static esp_err_t handler_envhist(httpd_req_t *req)
 {
+    ESP_LOGI(TAG, "HTTP GET %s", req->uri);
     httpd_resp_set_type(req, "application/json");
     char buf[256];
     int cnt = env_day_count();

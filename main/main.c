@@ -19,6 +19,7 @@
 #include "blehid.h"
 #include "sysmon.h"
 #include "env_hist.h"
+#include "esp_coexist.h"
 
 static const char *TAG = "SmartKnob";
 
@@ -140,6 +141,10 @@ void app_main(void)
      * BLE 先起会把内部 RAM 吃掉导致 esp_wifi_init NO_MEM 崩溃(实测) */
     wifi_init();
     blehid_init();        /* BLE HID: 电脑控制(S-Dial), 开机可配对 */
+    /* BLE HID 是低速外设, 让共存调度优先保障 WiFi 空口时间。
+     * 不设的话 PC 连上 BLE 后(Windows 默认 7.5ms 连接间隔)WiFi 被
+     * 高频抢占, 网页几乎无法打开(实测症状: httpd 正常但无响应) */
+    esp_coex_preference_set(ESP_COEX_PREFER_WIFI);
     init_sntp();
 
     /* httpd 绑定 0.0.0.0, 开机即启动, 不依赖 netif/WiFi 事件任务上下文 */
