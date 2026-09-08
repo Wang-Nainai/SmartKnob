@@ -240,6 +240,19 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
         if (event->connect.status == 0) {
             s_connected = true;
             s_conn_handle = event->connect.conn_handle;
+            /* 主动请求更宽松的连接参数: Windows 默认 7.5ms 连接间隔
+             * 会高频占用空口, coex 下把 WiFi 出方向挤到几乎瘫痪
+             * (网页打不开, 实测)。30-45ms + 从机延迟 2 对 HID 完全够用 */
+            struct ble_gap_upd_params upd = {
+                .itvl_min = 24,             /* 30ms (1.25ms 单位) */
+                .itvl_max = 36,             /* 45ms */
+                .latency = 2,
+                .supervision_timeout = 200, /* 2s (10ms 单位) */
+                .min_ce_len = 16,
+                .max_ce_len = 32,
+            };
+            int rc = ble_gap_update_params(event->connect.conn_handle, &upd);
+            ESP_LOGI(TAG, "conn params update (30-45ms): rc=%d", rc);
             ESP_LOGI(TAG, "PC connected (HID ready)");
         } else {
             adv_start();

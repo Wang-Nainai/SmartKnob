@@ -631,6 +631,10 @@ void webcfg_start(void)
     cfg.max_uri_handlers = 8;
     cfg.stack_size = 8192;
     cfg.lru_purge_enable = true;
+    /* coex + BLE HID 并存时出方向很慢, 5s 默认值会把 10KB 页面
+     * 发送超时(EAGAIN); 放宽到 20s, 慢链路也能完成 */
+    cfg.send_wait_timeout = 20;
+    cfg.recv_wait_timeout = 20;
 
     esp_err_t hs_err = httpd_start(&s_server, &cfg);
     if (hs_err != ESP_OK) {
