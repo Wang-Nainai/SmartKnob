@@ -231,6 +231,8 @@ static void setting_show_edit(setting_data_t *d, int item)
         lv_label_set_text(d->label_unit, "\xE5\x88\x86\xE9\x92\x9F");
         motor_set_mode_range(MOTOR_MODE_COARSE_STRONG_DETENTS, 0, 30, init);
         if (init == 0) {
+            /* 大值标签是纯 ASCII 的 montserrat_26, 显示中文需切中文字库 */
+            lv_obj_set_style_text_font(d->label_value, &lv_font_msyh_16, 0);
             lv_label_set_text(d->label_value, "\xE5\xB8\xB8\xE4\xBA\xAE");
             lv_obj_add_flag(d->label_unit, LV_OBJ_FLAG_HIDDEN);
         }
@@ -345,14 +347,17 @@ static void setting_timer_cb(lv_timer_t *t)
     if (d->edit_item == SET_BRIGHTNESS) {
         d->brightness = pos;
         display_set_brightness(pos);   /* 实时预览 */
+        lv_obj_set_style_text_font(d->label_value, &lv_font_montserrat_26, 0);
         snprintf(buf, sizeof(buf), "%ld", (long)pos);
         lv_label_set_text(d->label_value, buf);
     } else {
         d->timeout_min = pos;
         if (pos == 0) {
+            lv_obj_set_style_text_font(d->label_value, &lv_font_msyh_16, 0);
             lv_label_set_text(d->label_value, "\xE5\xB8\xB8\xE4\xBA\xAE");
             lv_obj_add_flag(d->label_unit, LV_OBJ_FLAG_HIDDEN);
         } else {
+            lv_obj_set_style_text_font(d->label_value, &lv_font_montserrat_26, 0);
             snprintf(buf, sizeof(buf), "%ld", (long)pos);
             lv_label_set_text(d->label_value, buf);
             lv_obj_clear_flag(d->label_unit, LV_OBJ_FLAG_HIDDEN);
