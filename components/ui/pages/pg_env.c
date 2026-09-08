@@ -279,7 +279,7 @@ static void pg_env_create(page_t *p)
     lv_obj_set_style_line_color(d->chart, lv_color_hex(XK_COLOR_BORDER), LV_PART_MAIN);
 
     d->ser = lv_chart_add_series(d->chart, lv_color_hex(0x00C864), LV_CHART_AXIS_PRIMARY_Y);
-    lv_obj_set_style_line_width(d->chart, 2, LV_PART_ITEMS);
+    lv_obj_set_style_line_width(d->chart, 1, LV_PART_ITEMS);
 
     lv_obj_t *cap = lv_label_create(d->chart);
     lv_obj_set_style_text_color(cap, lv_color_hex(XK_COLOR_FAINT), 0);
@@ -299,7 +299,8 @@ static void pg_env_create(page_t *p)
     d->last_seq = env_hist_seq();
 
     d->timer = lv_timer_create(env_timer_cb, 1000, d);
-    motor_set_mode(MOTOR_MODE_UNBOUND_NO_DETENTS, 0, 0);
+    /* 有档位手感: 一格 = 切换一次趋势图度量 */
+    motor_set_mode(MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
 }
 
 static void pg_env_destroy(page_t *p)
@@ -314,13 +315,24 @@ static void pg_env_destroy(page_t *p)
 
 static void pg_env_on_rotate(page_t *p, int32_t steps)
 {
-    (void)p;
-    (void)steps;
+    env_data_t *d = p->data;
+    if (steps == 0) {
+        return;
+    }
+    /* 旋转(有段落感)切换度量: CO2 -> 温度 -> 湿度 循环 */
+    d->metric = (uint8_t)(((d->metric + steps) % 3 + 3) % 3);
+    env_metric_apply(d);
+    pm_shake();
 }
 
 static void pg_env_on_back(page_t *p)
 {
     pm_pop();
+}
+
+static void pg_env_on_resume(page_t *p)
+{
+    motor_set_mode(MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
 }
 
 static void pg_env_on_tick(page_t *p)
@@ -343,6 +355,6 @@ const page_ops_t pg_env_ops = {
     .destroy = pg_env_destroy,
     .on_rotate = pg_env_on_rotate,
     .on_back = pg_env_on_back,
-    .on_resume = NULL,
+    .on_resume = pg_env_on_resume,
     .on_tick = pg_env_on_tick,
 };
