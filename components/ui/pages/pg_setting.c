@@ -206,8 +206,12 @@ static void setting_refresh_vals(setting_data_t *d)
     char buf[32];
     snprintf(buf, sizeof(buf), "%ld %%", (long)d->brightness);
     setting_set_val(d, SET_BRIGHTNESS, buf);
-    snprintf(buf, sizeof(buf), "%ld \xE5\x88\x86\xE9\x92\x9F", (long)d->timeout_min);
-    setting_set_val(d, SET_TIMEOUT, buf);
+    if (d->timeout_min == 0) {
+        setting_set_val(d, SET_TIMEOUT, "\xE5\xB8\xB8\xE4\xBA\xAE");   /* 常亮 */
+    } else {
+        snprintf(buf, sizeof(buf), "%ld \xE5\x88\x86\xE9\x92\x9F", (long)d->timeout_min);
+        setting_set_val(d, SET_TIMEOUT, buf);
+    }
     setting_set_val(d, SET_SYSMON, "\xE8\xBF\x9B\xE5\x85\xA5");   /* 进入 */
     setting_set_val(d, SET_BLE, "");
 }
@@ -218,12 +222,18 @@ static void setting_show_edit(setting_data_t *d, int item)
     lv_obj_clear_flag(d->edit_scr, LV_OBJ_FLAG_HIDDEN);
 
     int32_t init = item == SET_BRIGHTNESS ? d->brightness : d->timeout_min;
+    lv_scale_set_range(d->scale, 0, item == SET_BRIGHTNESS ? 100 : 30);
     if (item == SET_BRIGHTNESS) {
         lv_label_set_text(d->label_unit, "%");
         motor_set_mode_range(MOTOR_MODE_FINE_DETENTS, 10, 100, init);
     } else {
+        /* 31 档 × 8.23° ≈ 255° 全程: 细微模式(1°/档)只挤在 31° 里, 手感太差 */
         lv_label_set_text(d->label_unit, "\xE5\x88\x86\xE9\x92\x9F");
-        motor_set_mode_range(MOTOR_MODE_FINE_DETENTS, 0, 30, init);
+        motor_set_mode_range(MOTOR_MODE_COARSE_STRONG_DETENTS, 0, 30, init);
+        if (init == 0) {
+            lv_label_set_text(d->label_value, "\xE5\xB8\xB8\xE4\xBA\xAE");
+            lv_obj_add_flag(d->label_unit, LV_OBJ_FLAG_HIDDEN);
+        }
     }
     pm_shake();
 }
@@ -332,15 +342,23 @@ static void setting_timer_cb(lv_timer_t *t)
 
     int32_t pos = motor_get_position();
     char buf[24];
-    snprintf(buf, sizeof(buf), "%ld", (long)pos);
-    lv_label_set_text(d->label_value, buf);
-    lv_scale_set_line_needle_value(d->scale, d->needle, 95, pos);
     if (d->edit_item == SET_BRIGHTNESS) {
         d->brightness = pos;
         display_set_brightness(pos);   /* 实时预览 */
+        snprintf(buf, sizeof(buf), "%ld", (long)pos);
+        lv_label_set_text(d->label_value, buf);
     } else {
         d->timeout_min = pos;
+        if (pos == 0) {
+            lv_label_set_text(d->label_value, "\xE5\xB8\xB8\xE4\xBA\xAE");
+            lv_obj_add_flag(d->label_unit, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            snprintf(buf, sizeof(buf), "%ld", (long)pos);
+            lv_label_set_text(d->label_value, buf);
+            lv_obj_clear_flag(d->label_unit, LV_OBJ_FLAG_HIDDEN);
+        }
     }
+    lv_scale_set_line_needle_value(d->scale, d->needle, 95, pos);
 }
 
 static void pg_setting_create(page_t *p)
@@ -542,7 +560,7 @@ static void pg_setting_on_resume(page_t *p)
     if (d->edit_item == SET_BRIGHTNESS) {
         motor_set_mode_range(MOTOR_MODE_FINE_DETENTS, 10, 100, d->brightness);
     } else if (d->edit_item == SET_TIMEOUT) {
-        motor_set_mode_range(MOTOR_MODE_FINE_DETENTS, 0, 30, d->timeout_min);
+        motor_set_mode_range(MOTOR_MODE_COARSE_STRONG_DETENTS, 0, 30, d->timeout_min);
     } else {
         motor_set_mode(MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
         setting_set_focus(d, d->focus, 0);
