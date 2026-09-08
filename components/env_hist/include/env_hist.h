@@ -2,18 +2,27 @@
 
 #include <stdint.h>
 
-#define ENV_HIST_N      120            /* 环形点数 */
-#define ENV_HIST_MS     (60 * 1000)    /* 采样间隔 60s -> 2 小时窗口 */
+/* 两组环形缓冲(均存 PSRAM, 重启清零, 不磨损 flash):
+ *  - 高分辨率: 120 点 x 60s = 2h, 供设备端环境页趋势图
+ *  - 粗粒度:   288 点 x 5min = 24h, 供 web 管理台记录/展示 */
+#define ENV_HIST_N       120
+#define ENV_HIST_MS      (60 * 1000)
+#define ENV_DAY_N        288
+#define ENV_DAY_MS       (5 * 60 * 1000)
 
-/* 距上次采样满间隔才入队(首个样本立即入队); 缓冲在 PSRAM */
-void env_hist_push_if_due(uint16_t co2_ppm, float temp_c);
+/* 距上次采样满间隔才入队(首个样本立即入队) */
+void env_hist_push_if_due(uint16_t co2_ppm, float temp_c, float rh_pct);
 
-/* 累计样本数(含已被覆盖的): 值变化即代表有新样本 */
-uint32_t env_hist_seq(void);
-
-/* 当前缓冲内的样本数 */
-int env_hist_count(void);
-
-/* i=0 最旧, i=count-1 最新; 越界返回 0 */
-uint16_t env_hist_co2_at(int i);
+/* ---- 高分辨率 2h 窗口 ---- */
+uint32_t env_hist_seq(void);         /* 累计样本数, 值变化即有新样本 */
+int env_hist_count(void);            /* 当前缓冲内样本数 */
+uint16_t env_hist_co2_at(int i);     /* i=0 最旧; 越界返回 0 */
 int16_t  env_hist_temp_x10_at(int i);
+int16_t  env_hist_rh_x10_at(int i);
+
+/* ---- 粗粒度 24h 窗口 (web 用) ---- */
+uint32_t env_day_seq(void);
+int env_day_count(void);
+uint16_t env_day_co2_at(int i);
+int16_t  env_day_temp_x10_at(int i);
+int16_t  env_day_rh_x10_at(int i);

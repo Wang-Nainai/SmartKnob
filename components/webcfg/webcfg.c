@@ -12,6 +12,7 @@
 #include "nvs_flash.h"
 #include "webcfg.h"
 #include "app_state.h"
+#include "env_hist.h"
 #include "motor.h"
 #include "blehid.h"
 #include "display.h"
@@ -156,6 +157,11 @@ static const char page_html[] =
     "<div class=\"stat\"><div class=\"l\">内存</div><div class=\"v\" id=\"v_heap\">-</div></div>"
     "</div>"
     "<div class=\"tip\" id=\"info\">-</div></div>"
+    "<h2>\xE7\x8E\xAF\xE5\xA2\x83\xE8\xB6\x8B\xE5\x8A\xBF (24h)</h2>"
+    "<div class=\"card\">"
+    "<canvas id=\"envcv\" width=\"480\" height=\"130\" style=\"width:100%;background:#0f1218;border-radius:8px\"></canvas>"
+    "<div class=\"tip\" id=\"envlg\">-</div>"
+    "<div class=\"tip\">\xE6\xAF\x8F 5 \xE5\x88\x86\xE9\x92\x9F\xE9\x87\x87\xE4\xB8\x80\xE4\xB8\xAA\xE7\x82\xB9\xEF\xBC\x8C\xE5\x8E\x86\xE5\x8F\xB2\xE5\xAD\x98\xE4\xBA\x8E\xE5\x86\x85\xE5\xAD\x98\xEF\xBC\x8C\xE9\x87\x8D\xE5\x90\xAF\xE5\x90\x8E\xE6\xB8\x85\xE7\xA9\xBA</div></div>"
     "<h2>电机 / 手感</h2>"
     "<div class=\"card\">"
     "<select id=\"mmode\"></select>"
@@ -241,6 +247,24 @@ static const char page_html[] =
     "if(!document.getElementById('tmo').value)document.getElementById('tmo').value=s.timeout;"
     "}).catch(()=>{})}"
     "refresh();setInterval(refresh,5000);"
+    "function drawEnv(){fetch('/api/envhist').then(r=>r.json()).then(h=>{"
+    "const cv=document.getElementById('envcv'),c=cv.getContext('2d');"
+    "const W=cv.width,H=cv.height;c.clearRect(0,0,W,H);"
+    "c.strokeStyle='#232a36';c.lineWidth=1;c.beginPath();"
+    "for(let i=1;i<4;i++){c.moveTo(0,H*i/4);c.lineTo(W,H*i/4)}c.stroke();"
+    "const S=[['CO2',h.co2,'#00c864',1],['Temp',h.temp,'#3399ff',10],['RH',h.rh,'#00c8b4',10]];"
+    "const lg=[];"
+    "for(const[nm,arr,col,dv]of S){"
+    "if(!arr||!arr.length){lg.push(nm+' -');continue}"
+    "let mn=Math.min(...arr),mx=Math.max(...arr);if(mx===mn)mx=mn+1;"
+    "c.strokeStyle=col;c.lineWidth=1.6;c.beginPath();"
+    "arr.forEach((v,i)=>{const x=arr.length>1?i/(arr.length-1)*(W-4)+2:2;"
+    "const y=H-6-(v-mn)/(mx-mn)*(H-16);i?c.lineTo(x,y):c.moveTo(x,y)});c.stroke();"
+    "const last=arr[arr.length-1];"
+    "lg.push(nm+' '+(last/dv)+(nm=='CO2'?'ppm':'')+' ('+(mn/dv)+'~'+(mx/dv)+')')}"
+    "document.getElementById('envlg').textContent=lg.join('    ');"
+    "}).catch(()=>{})}"
+    "drawEnv();setInterval(drawEnv,60000);"
     "function save(ev){ev.preventDefault();const f=new FormData(ev.target);"
     "fetch('/save',{method:'POST',body:new URLSearchParams(f)}).then(r=>r.text()).then(t=>{"
     "msg(t);setTimeout(()=>location.reload(),3000)}).catch(()=>{})}"
@@ -306,6 +330,37 @@ static esp_err_t handler_status(httpd_req_t *req)
                      (unsigned int)((uptime_s % 3600) / 60));
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, buf, n);
+}
+
+/* GET /api/envhist: 24h 环境历史 (5min/点, 温湿度为 x10 整数)
+ * 体积 ~5KB, 用 chunked 发送避免大响应缓冲 */
+static esp_err_t handler_envhist(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "application/json");
+    char buf[256];
+    int cnt = env_day_count();
+    int n = snprintf(buf, sizeof(buf), "{\"iv_s\":300,\"n\":%d,\"co2\":[", cnt);
+    httpd_resp_send_chunk(req, buf, n);
+    for (int i = 0; i < cnt; i++) {
+        n = snprintf(buf, sizeof(buf), "%u%s", env_day_co2_at(i),
+                     i + 1 < cnt ? "," : "");
+        httpd_resp_send_chunk(req, buf, n);
+    }
+    httpd_resp_send_chunk(req, "],\"temp\":[", -1);
+    for (int i = 0; i < cnt; i++) {
+        n = snprintf(buf, sizeof(buf), "%d%s", env_day_temp_x10_at(i),
+                     i + 1 < cnt ? "," : "");
+        httpd_resp_send_chunk(req, buf, n);
+    }
+    httpd_resp_send_chunk(req, "],\"rh\":[", -1);
+    for (int i = 0; i < cnt; i++) {
+        n = snprintf(buf, sizeof(buf), "%d%s", env_day_rh_x10_at(i),
+                     i + 1 < cnt ? "," : "");
+        httpd_resp_send_chunk(req, buf, n);
+    }
+    httpd_resp_send_chunk(req, "]}", -1);
+    httpd_resp_send_chunk(req, NULL, 0);   /* 结束块 */
+    return ESP_OK;
 }
 
 /* ---------------- 设备控制 API (POST /api/set, body: action=&value=) ---------------- */
@@ -587,6 +642,7 @@ void webcfg_start(void)
     httpd_uri_t uris[] = {
         {.uri = "/",      .method = HTTP_GET,  .handler = handler_root,     .user_ctx = NULL},
         {.uri = "/status",.method = HTTP_GET,  .handler = handler_status,   .user_ctx = NULL},
+        {.uri = "/api/envhist",.method = HTTP_GET,.handler = handler_envhist,.user_ctx = NULL},
         {.uri = "/save",  .method = HTTP_POST, .handler = handler_save,     .user_ctx = NULL},
         {.uri = "/api/set",.method = HTTP_POST,.handler = handler_api_set,  .user_ctx = NULL},
         {.uri = "/ota",   .method = HTTP_POST, .handler = handler_ota,      .user_ctx = NULL},

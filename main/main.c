@@ -57,7 +57,7 @@ static void scd40_task(void *arg)
                      data.co2_ppm, data.temperature_c, data.humidity_pct);
             app_state_set_env(data.co2_ppm, data.temperature_c, data.humidity_pct);
             mqtt_ha_publish(data.co2_ppm, data.temperature_c, data.humidity_pct);
-            env_hist_push_if_due(data.co2_ppm, data.temperature_c);
+            env_hist_push_if_due(data.co2_ppm, data.temperature_c, data.humidity_pct);
         }
     }
 }
