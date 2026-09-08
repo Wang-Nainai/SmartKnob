@@ -20,6 +20,7 @@ void mqtt_ha_init(void) {}
 void mqtt_ha_reinit(void) {}
 void mqtt_ha_publish(uint16_t co2_ppm, float temp_c, float humidity_pct) { (void)co2_ppm; (void)temp_c; (void)humidity_pct; }
 bool mqtt_ha_is_connected(void) { return false; }
+bool mqtt_ha_is_configured(void) { return false; }
 void mqtt_ha_publish_cmd(const char *device, const char *cmd) { (void)device; (void)cmd; }
 #else
 
@@ -292,6 +293,11 @@ void mqtt_ha_publish(uint16_t co2_ppm, float temp_c, float humidity_pct)
 bool mqtt_ha_is_connected(void)
 {
     return s_connected;
+}
+
+bool mqtt_ha_is_configured(void)
+{
+    return s_client != NULL;
 }
 
 void mqtt_ha_publish_cmd(const char *device, const char *cmd)

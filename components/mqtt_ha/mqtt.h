@@ -11,6 +11,8 @@ void mqtt_ha_reinit(void);
 void mqtt_ha_publish(uint16_t co2_ppm, float temp_c, float humidity_pct);
 /* True if MQTT enabled and currently connected to broker */
 bool mqtt_ha_is_connected(void);
+/* True if MQTT client was created (broker configured,连接尝试中/失败也算) */
+bool mqtt_ha_is_configured(void);
 /* Publish a HASS control command (X-Knob style): <topic>/HOME/<device> with payload cmd */
 void mqtt_ha_publish_cmd(const char *device, const char *cmd);
 /* HA 设备自动化动作: dev_idx 0-3, cmd "ON"/"OFF"/"LEFT"/"RIGHT"

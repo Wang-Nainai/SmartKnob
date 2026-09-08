@@ -381,13 +381,11 @@ static void pg_setting_create(page_t *p)
         lv_label_set_text(name, set_names[k]);
         d->icons[i] = icon;
 
-        /* 当前值 (聚焦行右侧上部) */
+        /* 当前值 (聚焦行右侧上部, 与描述同左缘对齐) */
         lv_obj_t *val = lv_label_create(row);
         lv_obj_set_style_text_color(val, lv_color_hex(XK_COLOR_GRAY), 0);
         lv_obj_set_style_text_font(val, &lv_font_msyh_16, 0);
         lv_label_set_text(val, "");
-        lv_obj_set_width(val, 132);
-        lv_obj_set_style_text_align(val, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_align(val, LV_ALIGN_LEFT_MID, ICON_W_FOCUS + 10, -30);
         lv_obj_add_flag(val, LV_OBJ_FLAG_HIDDEN);
         d->val_labels[i] = val;

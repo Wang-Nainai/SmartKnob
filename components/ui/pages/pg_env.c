@@ -6,6 +6,7 @@
 #include "env_hist.h"
 #include "widgets/chart/lv_chart_private.h"   /* ser->y_points/start_point 全量重建 */
 
+LV_FONT_DECLARE(lv_font_montserrat_8);
 LV_FONT_DECLARE(lv_font_montserrat_10);
 LV_FONT_DECLARE(lv_font_montserrat_12);
 LV_FONT_DECLARE(lv_font_montserrat_14);
@@ -364,9 +365,9 @@ static void pg_env_create(page_t *p)
 
     lv_obj_t *cap = lv_label_create(d->chart);
     lv_obj_set_style_text_color(cap, lv_color_hex(XK_COLOR_FAINT), 0);
-    lv_obj_set_style_text_font(cap, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(cap, &lv_font_montserrat_10, 0);
     lv_label_set_text(cap, metric_caption[METRIC_CO2]);
-    lv_obj_align(cap, LV_ALIGN_TOP_LEFT, 30, 2);
+    lv_obj_align(cap, LV_ALIGN_TOP_RIGHT, -6, 2);
     d->cap = cap;
 
     /* 左侧 Y 轴刻度 (上/中/下, 随自适应量程刷新)
@@ -376,7 +377,7 @@ static void pg_env_create(page_t *p)
     for (int i = 0; i < 3; i++) {
         lv_obj_t *lb = lv_label_create(d->chart);
         lv_obj_set_style_text_color(lb, lv_color_hex(XK_COLOR_FAINT), 0);
-        lv_obj_set_style_text_font(lb, &lv_font_montserrat_10, 0);
+        lv_obj_set_style_text_font(lb, &lv_font_montserrat_8, 0);
         lv_label_set_text(lb, "--");
         lv_obj_align(lb, ax_align[i], -27, 0);
         lv_obj_set_width(lb, 24);

@@ -60,7 +60,7 @@ static lv_obj_t *status_label = NULL;
 #define LCD_BL_LEDC_TIMER    LEDC_TIMER_0
 #define LCD_BL_LEDC_CHANNEL  LEDC_CHANNEL_0
 #define LCD_BL_LEDC_FREQ_HZ  5000
-#define LCD_BL_DEFAULT_PCT   80
+#define LCD_BL_DEFAULT_PCT   100
 #define LCD_BL_TIMEOUT_DEFAULT_SEC 30
 
 static volatile int s_brightness_pct = LCD_BL_DEFAULT_PCT;
