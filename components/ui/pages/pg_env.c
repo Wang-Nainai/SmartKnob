@@ -149,7 +149,7 @@ static void pg_env_create(page_t *p)
     d->badge = lv_obj_create(p->root);
     lv_obj_remove_style_all(d->badge);
     lv_obj_set_size(d->badge, 72, 24);
-    lv_obj_set_pos(d->badge, 84, 24);
+    lv_obj_set_pos(d->badge, 84, 28);
     lv_obj_set_style_bg_color(d->badge, lv_color_hex(XK_COLOR_FAINT), 0);
     lv_obj_set_style_bg_opa(d->badge, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(d->badge, 12, 0);
@@ -168,18 +168,18 @@ static void pg_env_create(page_t *p)
     lv_label_set_text(d->label_value, "--");
     lv_obj_set_width(d->label_value, 216);
     lv_obj_set_style_text_align(d->label_value, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(d->label_value, LV_ALIGN_TOP_MID, 0, 54);
+    lv_obj_align(d->label_value, LV_ALIGN_TOP_MID, 0, 56);
 
     lv_obj_t *unit = lv_label_create(p->root);
     lv_obj_set_style_text_color(unit, lv_color_hex(XK_COLOR_GRAY), 0);
     lv_obj_set_style_text_font(unit, &lv_font_montserrat_14, 0);
     lv_label_set_text(unit, "CO2 / ppm");
-    lv_obj_align(unit, LV_ALIGN_TOP_MID, 0, 112);
+    lv_obj_align(unit, LV_ALIGN_TOP_MID, 0, 114);
 
     /* ---- CO2 彩色条(0-5000ppm) ---- */
     d->bar = lv_bar_create(p->root);
     lv_obj_set_size(d->bar, 216, 8);
-    lv_obj_set_pos(d->bar, 12, 134);
+    lv_obj_set_pos(d->bar, 12, 136);
     lv_bar_set_range(d->bar, 0, 5000);
     lv_bar_set_value(d->bar, 0, LV_ANIM_OFF);
     lv_obj_set_style_radius(d->bar, 4, 0);
@@ -195,8 +195,8 @@ static void pg_env_create(page_t *p)
 
     /* ---- CO2 趋势图 (2h @ 60s, 数据来自 env_hist) ---- */
     d->chart = lv_chart_create(p->root);
-    lv_obj_set_size(d->chart, 216, 82);
-    lv_obj_set_pos(d->chart, 12, 224);
+    lv_obj_set_size(d->chart, 216, 90);
+    lv_obj_set_pos(d->chart, 12, 220);
     lv_chart_set_type(d->chart, LV_CHART_TYPE_LINE);
     lv_chart_set_point_count(d->chart, ENV_HIST_N);
     lv_chart_set_update_mode(d->chart, LV_CHART_UPDATE_MODE_SHIFT);
