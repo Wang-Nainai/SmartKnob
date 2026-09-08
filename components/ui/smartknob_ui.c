@@ -108,15 +108,11 @@ static void anim_x_cb(void *obj, int32_t v)
     lv_obj_set_x((lv_obj_t *)obj, v);
 }
 
-/* ---------------- 数值滚动动画 (X-Knob lv_label_anim_effect 简化版) ----------------
- * 文本变化时: 旧文本作为"幽灵"标签下滑淡出, 新文本自上方滑入。
- * 幽灵挂在被更新的标签之下 —— 标签销毁时随之销毁, 无悬挂指针;
- * 上下平移用 translate_y 样式动画, 不干扰标签原布局对齐。 */
-static void roll_translate_cb(void *obj, int32_t v)
-{
-    lv_obj_set_style_translate_y((lv_obj_t *)obj, v, 0);
-}
-
+/* ---------------- 数值过渡动画 (纯交叉淡化, X-Knob lv_label_anim_effect 思路) ----------------
+ * 文本变化时: 旧文本作为"幽灵"子标签原位淡出, 新文本在下层显露。
+ * 不做位移 —— 小屏上双元素平移+淡出会显得忙乱、且数字宽度变化时
+ * 旧值会随布局跳动; 固定宽度标签(调用方设置) + 原位淡化观感最稳。
+ * 幽灵挂在被更新的标签之下, 标签销毁时随之销毁, 无悬挂指针。 */
 static void roll_ghost_done(lv_anim_t *a)
 {
     lv_obj_t *ghost = (lv_obj_t *)a->var;
@@ -146,41 +142,28 @@ void ui_label_roll(lv_obj_t *label, const char *text)
 
     ghost = lv_label_create(label);
     lv_obj_set_pos(ghost, 0, 0);
+    /* 复刻主标签的宽度/对齐/颜色/字体, 旧文本与新文本完全重合 */
+    int32_t cw = lv_obj_get_content_width(label);
+    if (cw > 0) {
+        lv_obj_set_width(ghost, cw);
+    }
+    lv_obj_set_style_text_align(ghost, lv_obj_get_style_text_align(label, 0), 0);
     lv_obj_set_style_text_color(ghost, lv_obj_get_style_text_color(label, 0), 0);
     lv_obj_set_style_text_font(ghost, lv_obj_get_style_text_font(label, 0), 0);
     lv_label_set_text(ghost, old ? old : "");
     lv_obj_set_user_data(label, ghost);
 
-    /* 新文本: 自上方滑入 */
-    lv_anim_t a;
-    lv_anim_init(&a);
-    lv_anim_set_var(&a, label);
-    lv_anim_set_exec_cb(&a, roll_translate_cb);
-    lv_anim_set_values(&a, -10, 0);
-    lv_anim_set_duration(&a, 250);
-    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
-    lv_anim_start(&a);
-
-    /* 旧文本: 下滑淡出后删除 */
+    /* 旧文本原位淡出, 显露下层新文本 */
     lv_anim_t b;
     lv_anim_init(&b);
     lv_anim_set_var(&b, ghost);
-    lv_anim_set_exec_cb(&b, roll_translate_cb);
-    lv_anim_set_values(&b, 0, 12);
-    lv_anim_set_duration(&b, 250);
-    lv_anim_set_path_cb(&b, lv_anim_path_ease_in);
+    lv_anim_set_exec_cb(&b, anim_opa_cb);
+    lv_anim_set_values(&b, LV_OPA_COVER, 0);
+    lv_anim_set_duration(&b, 220);
+    lv_anim_set_path_cb(&b, lv_anim_path_ease_out);
     lv_anim_set_user_data(&b, label);
     lv_anim_set_ready_cb(&b, roll_ghost_done);
     lv_anim_start(&b);
-
-    lv_anim_t c;
-    lv_anim_init(&c);
-    lv_anim_set_var(&c, ghost);
-    lv_anim_set_exec_cb(&c, anim_opa_cb);
-    lv_anim_set_values(&c, LV_OPA_COVER, 0);
-    lv_anim_set_duration(&c, 250);
-    lv_anim_set_path_cb(&c, lv_anim_path_ease_in);
-    lv_anim_start(&c);
 
     lv_label_set_text(label, text);
 }
@@ -481,6 +464,9 @@ static void status_bar_create(void)
     lv_obj_set_style_text_color(sb_time, lv_color_hex(XK_COLOR_TEXT), 0);
     lv_obj_set_style_text_font(sb_time, &lv_font_montserrat_14, 0);
     lv_label_set_text(sb_time, "--:--");
+    /* 固定宽度+居中: 数字滚动动画时新旧文本完全重合, 位数变化不位移 */
+    lv_obj_set_width(sb_time, 44);
+    lv_obj_set_style_text_align(sb_time, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(sb_time, LV_ALIGN_RIGHT_MID, -6, 0);
 
     lv_obj_add_event_cb(bar, page_gesture_cb, LV_EVENT_GESTURE, NULL);
