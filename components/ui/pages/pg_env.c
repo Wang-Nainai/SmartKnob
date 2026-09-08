@@ -6,6 +6,7 @@
 #include "env_hist.h"
 #include "widgets/chart/lv_chart_private.h"   /* ser->y_points/start_point 全量重建 */
 
+LV_FONT_DECLARE(lv_font_montserrat_10);
 LV_FONT_DECLARE(lv_font_montserrat_12);
 LV_FONT_DECLARE(lv_font_montserrat_14);
 LV_FONT_DECLARE(lv_font_montserrat_16);
@@ -368,16 +369,17 @@ static void pg_env_create(page_t *p)
     lv_obj_align(cap, LV_ALIGN_TOP_LEFT, 30, 2);
     d->cap = cap;
 
-    /* 左侧 Y 轴刻度 (上/中/下, 随自适应量程刷新) */
+    /* 左侧 Y 轴刻度 (上/中/下, 随自适应量程刷新)
+     * 注意: align 原点在内容区(pad_left 之内), 负偏移拉回最左刻度栏 */
     static const lv_align_t ax_align[3] = {LV_ALIGN_TOP_LEFT, LV_ALIGN_LEFT_MID, LV_ALIGN_BOTTOM_LEFT};
     lv_obj_t **ax_out[3] = {&d->ax_hi, &d->ax_mid, &d->ax_lo};
     for (int i = 0; i < 3; i++) {
         lv_obj_t *lb = lv_label_create(d->chart);
         lv_obj_set_style_text_color(lb, lv_color_hex(XK_COLOR_FAINT), 0);
-        lv_obj_set_style_text_font(lb, &lv_font_montserrat_12, 0);
+        lv_obj_set_style_text_font(lb, &lv_font_montserrat_10, 0);
         lv_label_set_text(lb, "--");
-        lv_obj_align(lb, ax_align[i], 1, 0);
-        lv_obj_set_width(lb, 25);
+        lv_obj_align(lb, ax_align[i], -27, 0);
+        lv_obj_set_width(lb, 24);
         lv_obj_set_style_text_align(lb, LV_TEXT_ALIGN_CENTER, 0);
         *ax_out[i] = lb;
     }
