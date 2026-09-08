@@ -1,9 +1,13 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_system.h"
 #include "page_mgr.h"
 #include "motor.h"
 #include "display.h"
 #include "blehid.h"
+#include "esp_system.h"
 
 LV_FONT_DECLARE(lv_font_montserrat_26);
 LV_FONT_DECLARE(lv_font_msyh_16);
@@ -19,7 +23,7 @@ void ui_nvs_save_i32(const char *key, int32_t value);
  * - 编辑: 全屏环形刻度, 旋转调节, 点击保存
  * ============================================================ */
 
-#define SET_N         4
+#define SET_N         5
 #define COPY_N        3
 #define ROWS_N        (SET_N * COPY_N)
 #define ITEM_H        100
@@ -32,6 +36,7 @@ void ui_nvs_save_i32(const char *key, int32_t value);
 #define SET_TIMEOUT    1
 #define SET_SYSMON     2
 #define SET_BLE        3
+#define SET_CAL        4
 
 typedef struct {
     int focus;
@@ -59,18 +64,21 @@ static const char *set_names[SET_N] = {
     "\xE7\x86\x84\xE5\xB1\x8F\xE6\x97\xB6\xE9\x95\xBF", /* 熄屏时长 */
     "\xE7\xB3\xBB\xE7\xBB\x9F\xE7\x9B\x91\xE6\x8E\xA7", /* 系统监控 */
     "\xE8\x93\x9D\xE7\x89\x99",                         /* 蓝牙 */
+    "\xE9\x87\x8D\xE6\x96\xB0\xE6\xA0\xA1\xE5\x87\x86", /* 重新校准 */
 };
 static const char *set_icons[SET_N] = {
     LV_SYMBOL_EYE_OPEN,   /* 亮度 */
     LV_SYMBOL_BELL,       /* 熄屏时长 */
     LV_SYMBOL_BARS,       /* 系统监控 */
     LV_SYMBOL_BLUETOOTH,  /* 蓝牙 */
+    LV_SYMBOL_REFRESH,    /* 重新校准 */
 };
 static const char *set_descs[SET_N] = {
     "\xE5\xB1\x8F\xE5\xB9\x95\xE8\x83\x8C\xE5\x85\x89" "\n10 - 100 %",
     "\xE8\x87\xAA\xE5\x8A\xA8\xE7\x86\x84\xE5\xB1\x8F" "\n0 - 30 \xE5\x88\x86\xE9\x92\x9F",
     "CPU / RAM / \xE4\xBB\xBB\xE5\x8A\xA1\xE8\xA1\xA8",
     "\xE6\xB8\x85\xE9\x99\xA4\xE5\xB7\xB2\xE9\x85\x8D\xE5\xAF\xB9\xE8\xAE\xBE\xE5\xA4\x87",
+    "\xE7\x94\xB5\xE6\x9C\xBA\xE9\x9B\xB6\xE4\xBD\x8D\xE6\xA0\xA1\xE5\x87\x86" "\n\xE5\x8F\x8C\xE5\x87\xBB\xE9\x87\x8D\xE5\x90\xAF\xE6\x89\xA7\xE8\xA1\x8C", /* 电机零位校准\n双击重启执行 */
 };
 
 static void setting_anim_width(lv_obj_t *icon, int32_t target)
@@ -266,6 +274,22 @@ static void setting_row_cb(lv_event_t *e)
     if (idx == SET_SYSMON) {
         pm_push(PAGE_SYSMON);
         pm_shake();
+    } else if (idx == SET_CAL) {
+        /* 电机校准重学: 双击确认 -> 清 NVS -> 重启开机校准 */
+        static int32_t cal_pending_until = 0;
+        int32_t now = (int32_t)lv_tick_get();
+        if (now < cal_pending_until) {
+            cal_pending_until = 0;
+            motor_clear_calibration();
+            setting_set_val(d, SET_CAL,
+                            "\xE6\xA0\xA1\xE5\x87\x86\xE4\xB8\xAD\xE5\xB0\x86\xE9\x87\x8D\xE5\x90\xAF"); /* 校准中即将重启 */
+            vTaskDelay(pdMS_TO_TICKS(600));   /* 让提示渲染出来 */
+            esp_restart();
+        } else {
+            cal_pending_until = now + 4000;
+            setting_set_val(d, SET_CAL,
+                            "\xE5\x86\x8D\xE7\x82\xB9\xE4\xB8\x80\xE6\xAC\xA1\xE7\xA1\xAE\xE8\xAE\xA4"); /* 再点一次确认 */
+        }
     } else if (idx == SET_BLE) {
         /* 清除蓝牙配对: 双击确认防误触 */
         static int32_t pending_until = 0;

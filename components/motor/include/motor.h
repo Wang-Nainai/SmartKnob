@@ -45,6 +45,8 @@ float motor_get_angle_offset_deg(void);
 /* 模式/位置重置序列号: 每次模式切换或位置强制设置时递增,
  * 供 input 组件检测并静默重同步(防页面切换后的幽灵旋转) */
 uint32_t motor_get_mode_seq(void);
+/* 清除 FOC 校准数据(零电角/方向), 下次开机重新开环校准 */
+void motor_clear_calibration(void);
 
 #ifdef __cplusplus
 }

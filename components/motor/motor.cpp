@@ -6,6 +6,8 @@
 #include "freertos/queue.h"
 #include "esp_simplefoc.h"
 #include "i2c_bus.h"
+#include "nvs_flash.h"
+#include "nvs.h"
 #include <math.h>
 #include <string.h>
 
@@ -508,6 +510,56 @@ static void haptic_update(void)
     }
 }
 
+/* ---------------- FOC 校准持久化 (NVS) ----------------
+ * 开环校准(方向探测 + 零电角测量)只在首次开机做, 结果存 NVS;
+ * 之后每次上电 initFOC 直通, 开机时间 4.2s -> <1s。
+ * 硬件不变则校准值永久有效; 换电机/传感器后从设置页清除重学。 */
+#define MOTOR_CAL_NS "mcal"
+
+static bool motor_cal_load(float *zangle, int8_t *dir)
+{
+    nvs_handle_t h;
+    if (nvs_open(MOTOR_CAL_NS, NVS_READONLY, &h) != ESP_OK) {
+        return false;
+    }
+    size_t sz = sizeof(float);
+    bool ok = nvs_get_blob(h, "zangle", zangle, &sz) == ESP_OK;
+    ok = ok && nvs_get_i8(h, "dir", dir) == ESP_OK;
+    uint8_t valid = 0;
+    ok = ok && nvs_get_u8(h, "valid", &valid) == ESP_OK && valid == 1;
+    nvs_close(h);
+    /* 合理性: 零电角在 (0, 2pi), 方向为 +-1 */
+    if (ok && (*zangle <= 0 || *zangle >= 2 * _PI || (*dir != 1 && *dir != -1))) {
+        ok = false;
+    }
+    return ok;
+}
+
+static void motor_cal_save(float zangle, int8_t dir)
+{
+    nvs_handle_t h;
+    if (nvs_open(MOTOR_CAL_NS, NVS_READWRITE, &h) != ESP_OK) {
+        return;
+    }
+    nvs_set_blob(h, "zangle", &zangle, sizeof(float));
+    nvs_set_i8(h, "dir", dir);
+    nvs_set_u8(h, "valid", 1);
+    nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGI(TAG, "FOC calibration saved: zangle=%.3f rad, dir=%d", zangle, dir);
+}
+
+void motor_clear_calibration(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(MOTOR_CAL_NS, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_erase_all(h);
+        nvs_commit(h);
+        nvs_close(h);
+        ESP_LOGW(TAG, "FOC calibration cleared, will recalibrate on next boot");
+    }
+}
+
 /* ---------------- 电机主任务（唯一允许触碰 BLDC 硬件的任务） ---------------- */
 
 static void motor_task(void *pvParameters)
@@ -616,9 +668,32 @@ esp_err_t motor_init(void)
         ESP_LOGE(TAG, "motor init failed");
         return ESP_ERR_INVALID_STATE;
     }
-    if (!motor.initFOC()) {
-        ESP_LOGE(TAG, "initFOC failed: sensor not responding, check MT6701 wiring");
-        return ESP_ERR_INVALID_STATE;
+
+    /* 校准持久化: 有存档直通(<1s), 无存档开环校准后保存.
+     * 这版 SimpleFOC 的 initFOC() 无参: 预先设好 sensor_direction /
+     * zero_electric_angle 时 alignSensor() 自动跳过开环校准 */
+    float cal_zangle = 0;
+    int8_t cal_dir = 0;
+    bool have_cal = motor_cal_load(&cal_zangle, &cal_dir);
+    if (have_cal) {
+        motor.sensor_direction = (Direction)cal_dir;
+        motor.zero_electric_angle = cal_zangle;
+        if (!motor.initFOC()) {
+            ESP_LOGE(TAG, "initFOC failed (with saved calibration)");
+            return ESP_ERR_INVALID_STATE;
+        }
+        ESP_LOGI(TAG, "initFOC: skipped open-loop calibration (saved zangle=%.3f, dir=%d)",
+                 cal_zangle, cal_dir);
+    } else {
+        if (!motor.initFOC()) {
+            ESP_LOGE(TAG, "initFOC failed: sensor not responding, check MT6701 wiring");
+            return ESP_ERR_INVALID_STATE;
+        }
+        if (motor.zero_electric_angle > 0 && motor.sensor_direction != Direction::UNKNOWN) {
+            motor_cal_save(motor.zero_electric_angle, (int8_t)motor.sensor_direction);
+        } else {
+            ESP_LOGW(TAG, "auto calibration produced invalid results, not saved");
+        }
     }
 
     motor_config = knob_configs[MOTOR_MODE_COARSE_STRONG_DETENTS];
