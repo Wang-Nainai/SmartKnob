@@ -280,6 +280,10 @@ static void pg_env_create(page_t *p)
 
     d->ser = lv_chart_add_series(d->chart, lv_color_hex(0x00C864), LV_CHART_AXIS_PRIMARY_Y);
     lv_obj_set_style_line_width(d->chart, 1, LV_PART_ITEMS);
+    /* 关键: LINE 图默认按 INDICATOR 尺寸在每个采样点画圆点,
+     * 120 个点连成一串"粗线"; 归零后才是纯细线 */
+    lv_obj_set_style_width(d->chart, 0, LV_PART_INDICATOR);
+    lv_obj_set_style_height(d->chart, 0, LV_PART_INDICATOR);
 
     lv_obj_t *cap = lv_label_create(d->chart);
     lv_obj_set_style_text_color(cap, lv_color_hex(XK_COLOR_FAINT), 0);

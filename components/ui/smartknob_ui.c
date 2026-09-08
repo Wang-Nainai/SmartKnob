@@ -522,6 +522,63 @@ static void gesture_bubble_install(lv_obj_t *obj)
 
 /* ---------------- 旋钮输入消费 (LVGL 任务内) ---------------- */
 
+/* ---- 快速逆时针甩动返回 ----
+ * 350ms 窗口内连续逆时针累计 >= 10 格(约 150 度) = 快速回甩,
+ * 浏览型二级页面直接返回主菜单。控制流页面禁用:
+ * S-Dial/手感/触摸校准的快转是合法的数据输入(音量/位置/校准)。 */
+#define FLICK_BACK_STEPS   10
+#define FLICK_BACK_MS      350
+
+static int32_t s_ccw_acc;
+static uint32_t s_ccw_last;
+
+static bool flick_back_allowed(page_t *top)
+{
+    for (int i = 0; i < PAGE_COUNT; i++) {
+        if (page_ops_table[i] == top->ops) {
+            switch ((page_id_t)i) {
+            case PAGE_ENV:
+            case PAGE_HASS:
+            case PAGE_SETTING:
+            case PAGE_SYSINFO:
+            case PAGE_FACTORY:
+            case PAGE_APCFG:
+            case PAGE_SYSMON:
+                return true;
+            default:
+                return false;
+            }
+        }
+    }
+    return false;
+}
+
+/* 返回 true = 已触发返回(调用方执行 on_back 并吞掉本次输入) */
+static bool flick_back_check(page_t *top, int32_t steps)
+{
+    if (steps >= 0) {
+        s_ccw_acc = 0;              /* 顺时针打断甩动手势 */
+        return false;
+    }
+    uint32_t now = lv_tick_get();
+    if (now - s_ccw_last > FLICK_BACK_MS) {
+        s_ccw_acc = 0;              /* 距上次逆时针太久, 窗口过期 */
+    }
+    s_ccw_last = now;
+    s_ccw_acc += -steps;
+    if (s_ccw_acc < FLICK_BACK_STEPS) {
+        return false;
+    }
+    s_ccw_acc = 0;
+    if (pm_stack_depth <= 1) {
+        return false;               /* 主菜单没有可返回的层 */
+    }
+    if (top->ops->on_back == NULL || !flick_back_allowed(top)) {
+        return false;
+    }
+    return true;
+}
+
 static void input_timer_cb(lv_timer_t *t)
 {
     (void)t;
@@ -539,8 +596,15 @@ static void input_timer_cb(lv_timer_t *t)
         if (!top) {
             continue;
         }
-        if (evt.type == KNOB_EVENT_ROTATE && top->ops->on_rotate) {
-            top->ops->on_rotate(top, evt.steps);
+        if (evt.type == KNOB_EVENT_ROTATE) {
+            if (flick_back_check(top, evt.steps)) {
+                top->ops->on_back(top);  /* 快速逆时针甩动: 返回 */
+                pm_shake();
+                continue;
+            }
+            if (top->ops->on_rotate) {
+                top->ops->on_rotate(top, evt.steps);
+            }
         }
     }
 }
