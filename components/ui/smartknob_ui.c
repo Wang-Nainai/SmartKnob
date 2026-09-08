@@ -110,19 +110,11 @@ static void anim_x_cb(void *obj, int32_t v)
 
 /* ---------------- 数值过渡动画 (纯交叉淡化, X-Knob lv_label_anim_effect 思路) ----------------
  * 文本变化时: 旧文本作为"幽灵"子标签原位淡出, 新文本在下层显露。
- * 不做位移 —— 小屏上双元素平移+淡出会显得忙乱、且数字宽度变化时
- * 旧值会随布局跳动; 固定宽度标签(调用方设置) + 原位淡化观感最稳。
- * 幽灵挂在被更新的标签之下, 标签销毁时随之销毁, 无悬挂指针。 */
-static void roll_ghost_done(lv_anim_t *a)
-{
-    lv_obj_t *ghost = (lv_obj_t *)a->var;
-    lv_obj_t *label = (lv_obj_t *)a->user_data;
-    if (label && (lv_obj_t *)lv_obj_get_user_data(label) == ghost) {
-        lv_obj_set_user_data(label, NULL);
-    }
-    lv_obj_delete(ghost);
-}
-
+ * 幽灵标签【永不删除、复用】: anim ready 回调里删除对象(其上还有
+ * 动画在跑)会破坏 LVGL 动画链表 -> 堆损坏 (实测: 状态栏时钟每分钟
+ * 滚动一次, 一分钟后随机堆崩溃)。淡出后幽灵 opa=0 隐身, 下次滚动
+ * 改文本重新淡出即可; 随宿主标签销毁, 无泄漏。
+ * 不做位移 —— 数字宽度变化引起的布局跳动已通过固定宽度标签消除。 */
 void ui_label_roll(lv_obj_t *label, const char *text)
 {
     if (!label || !text) {
@@ -133,27 +125,24 @@ void ui_label_roll(lv_obj_t *label, const char *text)
         return;
     }
 
-    /* 上一次的幽灵还在飞: 立即移除(连续快速刷新时旧文本瞬间消失) */
     lv_obj_t *ghost = (lv_obj_t *)lv_obj_get_user_data(label);
-    if (ghost) {
-        lv_obj_set_user_data(label, NULL);
-        lv_obj_delete(ghost);
+    if (ghost == NULL) {
+        ghost = lv_label_create(label);
+        lv_obj_set_pos(ghost, 0, 0);
+        /* 复刻主标签的宽度/对齐, 新旧文本完全重合 */
+        int32_t cw = lv_obj_get_content_width(label);
+        if (cw > 0) {
+            lv_obj_set_width(ghost, cw);
+        }
+        lv_obj_set_style_text_align(ghost, lv_obj_get_style_text_align(label, 0), 0);
+        lv_obj_set_user_data(label, ghost);
     }
-
-    ghost = lv_label_create(label);
-    lv_obj_set_pos(ghost, 0, 0);
-    /* 复刻主标签的宽度/对齐/颜色/字体, 旧文本与新文本完全重合 */
-    int32_t cw = lv_obj_get_content_width(label);
-    if (cw > 0) {
-        lv_obj_set_width(ghost, cw);
-    }
-    lv_obj_set_style_text_align(ghost, lv_obj_get_style_text_align(label, 0), 0);
+    lv_label_set_text(ghost, old ? old : "");
     lv_obj_set_style_text_color(ghost, lv_obj_get_style_text_color(label, 0), 0);
     lv_obj_set_style_text_font(ghost, lv_obj_get_style_text_font(label, 0), 0);
-    lv_label_set_text(ghost, old ? old : "");
-    lv_obj_set_user_data(label, ghost);
+    lv_obj_set_style_opa(ghost, LV_OPA_COVER, 0);
 
-    /* 旧文本原位淡出, 显露下层新文本 */
+    /* 旧文本原位淡出, 显露下层新文本 (同 var+cb 重复动画自动替换) */
     lv_anim_t b;
     lv_anim_init(&b);
     lv_anim_set_var(&b, ghost);
@@ -161,8 +150,6 @@ void ui_label_roll(lv_obj_t *label, const char *text)
     lv_anim_set_values(&b, LV_OPA_COVER, 0);
     lv_anim_set_duration(&b, 220);
     lv_anim_set_path_cb(&b, lv_anim_path_ease_out);
-    lv_anim_set_user_data(&b, label);
-    lv_anim_set_ready_cb(&b, roll_ghost_done);
     lv_anim_start(&b);
 
     lv_label_set_text(label, text);
