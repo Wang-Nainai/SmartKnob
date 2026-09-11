@@ -180,6 +180,23 @@ static void publish_state(esp_mqtt_client_handle_t client)
     esp_mqtt_client_publish(client, MQTT_TOPIC_STATE, payload, n, 1, 0);
 }
 
+/* 旧版占位触发器(light/ac/fan/washer x on/off/left/right)的发现消息是
+ * retained 的, 换真实设备后发空保留载荷让 HA 清掉它们 */
+static void publish_legacy_cleanup(esp_mqtt_client_handle_t client)
+{
+    static const char *old_devs[4] = {"light", "ac", "fan", "washer"};
+    static const char *old_acts[4] = {"on", "off", "left", "right"};
+    for (int d = 0; d < 4; d++) {
+        for (int a = 0; a < 4; a++) {
+            char topic[128];
+            snprintf(topic, sizeof(topic),
+                     "homeassistant/device_automation/" MQTT_DEVICE "/%s_%s/config",
+                     old_devs[d], old_acts[a]);
+            esp_mqtt_client_publish(client, topic, "", 0, 1, 1);
+        }
+    }
+}
+
 static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data)
 {
     esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)event_data;
@@ -192,6 +209,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         webcfg_set_mqtt_connected(true);
         led_set_color(0, 255, 255);   /* 青: WiFi+MQTT 就绪 */
         publish_discovery(client);            /* 3 条传感器发现 */
+        publish_legacy_cleanup(client);       /* 清掉旧占位触发器的 retained 消息 */
         esp_mqtt_client_subscribe(client, "smartknob/cmnd/#", 1);
         /* 16 条触发器发现逐条错开发送(400ms/条), 防止 BLE 抢空口时写超时 */
         if (!s_disc_timer) {
