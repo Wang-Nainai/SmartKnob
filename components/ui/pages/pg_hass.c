@@ -228,12 +228,13 @@ static void hass_ctrl_visual(hass_data_t *d)
         lv_label_set_text(d->label_hint, "\xE7\x82\xB9\xE5\x9B\xBE\xE6\xA0\x87\xE5\x88\x87\xE6\x8D\xA2\xE6\xB8\xA9\xE5\xBA\xA6/\xE9\xA3\x8E\xE9\x80\x9F"); /* 点图标切换温度/风速 */
         hass_indic_update(d);
     } else {
-        /* 灯只有开/关: 静态圆环, 无填充弧无指示点, 转动无动作 */
+        /* 灯只有开/关: 两档开/关模式, 圆点停在"开"位(300°)或"关"位(240°) */
         lv_arc_set_angles(d->dial, 0, 0);
-        lv_obj_add_flag(d->dot, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(d->dot, LV_OBJ_FLAG_HIDDEN);
+        hass_dot_at(d, d->dev_on[d->focus] ? 300 : 240);
         lv_obj_set_style_text_font(d->icon, &lv_font_montserrat_48, 0);
         lv_label_set_text(d->icon, device_icons[d->focus]);
-        lv_label_set_text(d->label_hint, "\xE7\x82\xB9\xE5\x87\xBB\xE5\xBC\x80\xE5\x85\xB3"); /* 点击开关 */
+        lv_label_set_text(d->label_hint, "\xE7\x82\xB9\xE5\x87\xBB\xE5\xBC\x80\xE5\x85\xB3 \xC2\xB7 \xE6\x97\x8B\xE8\xBD\xAC\xE5\x90\x8C\xE6\x95\x88"); /* 点击开关 · 旋转同效 */
     }
 }
 
@@ -244,8 +245,13 @@ static void hass_show_control(hass_data_t *d, bool ctrl)
         d->dot_deg = 0;
         hass_ctrl_visual(d);
         lv_obj_clear_flag(d->ctrl_scr, LV_OBJ_FLAG_HIDDEN);
-        /* 棘轮档: 每转一档"咔哒"一声 = 一步调节, 旋转才有意义 */
-        motor_set_mode(MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
+        if (d->focus == HASS_DEV_AC) {
+            /* 棘轮档: 每转一档"咔哒"一声 = 一步调节 */
+            motor_set_mode(MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
+        } else {
+            /* 灯: 开/关两档, 初始档位=当前状态 */
+            motor_set_mode_range(MOTOR_MODE_ON_OFF, 0, 1, d->dev_on[d->focus] ? 1 : 0);
+        }
     } else {
         lv_obj_add_flag(d->ctrl_scr, LV_OBJ_FLAG_HIDDEN);
         motor_set_mode(MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
@@ -286,6 +292,10 @@ static void hass_toggle_power(hass_data_t *d)
     d->dev_on[d->focus] = on;
     mqtt_ha_publish_cmd(device_names[d->focus], on ? "ON" : "OFF");
     mqtt_ha_publish_action(d->focus, on ? "on" : "off");
+    /* 灯: 电机同步到对应档位, 圆点与状态一致 */
+    if (d->focus != HASS_DEV_AC) {
+        motor_set_position(on ? 1 : 0);
+    }
     hass_ctrl_visual(d);
     pm_shake();
 }
@@ -531,16 +541,15 @@ static void pg_hass_on_rotate(page_t *p, int32_t steps)
 {
     hass_data_t *d = p->data;
     if (d->in_control) {
-        /* 节流: 快转时最多 10 条/秒, 避免 MQTT 洪泛 */
-        static uint32_t last_cmd_tick = 0;
-        uint32_t now = lv_tick_get();
-        if (now - last_cmd_tick < 100) {
-            return;
-        }
-        last_cmd_tick = now;
-        int dir = steps > 0 ? 1 : -1;
         if (d->focus == HASS_DEV_AC) {
-            /* 只有空调用旋转调节: 温度±1 / 风速档位循环 */
+            /* 节流: 快转时最多 10 条/秒, 避免 MQTT 洪泛 */
+            static uint32_t last_cmd_tick = 0;
+            uint32_t now = lv_tick_get();
+            if (now - last_cmd_tick < 100) {
+                return;
+            }
+            last_cmd_tick = now;
+            int dir = steps > 0 ? 1 : -1;
             if (d->ac_mode == 0) {
                 /* 温度模式: 本地模拟 16..30, 每事件 1 度 */
                 d->ac_temp += dir;
@@ -556,8 +565,18 @@ static void pg_hass_on_rotate(page_t *p, int32_t steps)
             hass_ctrl_visual(d);
             hass_indic_update(d);
             pm_shake();
+        } else {
+            /* 灯: 转动即控制开关 —— 顺时针=开, 逆时针=关 (电机两档, 位置即状态) */
+            int32_t pos = motor_get_position();
+            bool on = (pos != 0);
+            if (on != d->dev_on[d->focus]) {
+                d->dev_on[d->focus] = on;
+                mqtt_ha_publish_cmd(device_names[d->focus], on ? "ON" : "OFF");
+                mqtt_ha_publish_action(d->focus, on ? "on" : "off");
+                hass_ctrl_visual(d);
+                pm_shake();
+            }
         }
-        /* 灯只有开/关: 转动无动作 */
     } else {
         /* 无级循环: 灯光->空调->风扇->洗衣机->灯光... */
         d->focus = ((d->focus + steps) % HASS_DEVICE_NUM + HASS_DEVICE_NUM) % HASS_DEVICE_NUM;
@@ -585,7 +604,12 @@ static void pg_hass_on_back(page_t *p)
 static void pg_hass_on_resume(page_t *p)
 {
     hass_data_t *d = p->data;
-    motor_set_mode(MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
+    if (d->in_control && d->focus != HASS_DEV_AC) {
+        /* 灯: 恢复开/关两档, 档位对齐当前状态 */
+        motor_set_mode_range(MOTOR_MODE_ON_OFF, 0, 1, d->dev_on[d->focus] ? 1 : 0);
+    } else {
+        motor_set_mode(MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
+    }
     if (!d->in_control) {
         hass_set_focus(d, d->focus, 0);
     } else {
