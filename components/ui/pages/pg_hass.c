@@ -71,7 +71,6 @@ typedef struct {
     lv_obj_t *label_hint;   /* 底部操作提示(按设备变化) */
     int dot_deg;            /* 指示圆点角度 (0=12点方向, 顺时针) */
     bool dev_on[HASS_DEVICE_NUM];  /* 本地模拟的开/关状态 */
-    int brightness[HASS_DEVICE_NUM]; /* 灯亮度 0..100 (本地模拟, 旋转调节) */
     int ac_temp;            /* 空调本地模拟温度 16..30 */
     int ac_fan;             /* 空调风速 0自动 1低 2中 3高 */
     int ac_mode;            /* 空调调节模式 0=温度 1=风速 */
@@ -229,22 +228,12 @@ static void hass_ctrl_visual(hass_data_t *d)
         lv_label_set_text(d->label_hint, "\xE7\x82\xB9\xE5\x9B\xBE\xE6\xA0\x87\xE5\x88\x87\xE6\x8D\xA2\xE6\xB8\xA9\xE5\xBA\xA6/\xE9\xA3\x8E\xE9\x80\x9F"); /* 点图标切换温度/风速 */
         hass_indic_update(d);
     } else {
-        /* 灯: 圆底显示亮度值, 圆环按亮度填充(Apple Watch 音量环), 点在弧头 */
-        int b = d->brightness[d->focus];
-        int deg = b * 36 / 10;   /* % -> 度 (0..360) */
-        lv_obj_set_style_arc_color(d->dial, lv_color_hex(on ? XK_COLOR_ACCENT : 0x3A3A3A), LV_PART_INDICATOR);
-        lv_arc_set_angles(d->dial, 0, deg);
+        /* 灯只有开/关: 静态圆环, 无填充弧无指示点, 转动无动作 */
+        lv_arc_set_angles(d->dial, 0, 0);
+        lv_obj_add_flag(d->dot, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_style_text_font(d->icon, &lv_font_montserrat_48, 0);
-        char buf[8];
-        snprintf(buf, sizeof(buf), "%d", b);
-        lv_label_set_text(d->icon, buf);
-        if (deg > 0) {
-            lv_obj_clear_flag(d->dot, LV_OBJ_FLAG_HIDDEN);
-            hass_dot_at(d, deg);
-        } else {
-            lv_obj_add_flag(d->dot, LV_OBJ_FLAG_HIDDEN);
-        }
-        lv_label_set_text(d->label_hint, "\xE6\x97\x8B\xE8\xBD\xAC\xE8\xB0\x83\xE4\xBA\xAE\xE5\xBA\xA6 \xC2\xB7 \xE7\x82\xB9\xE5\x87\xBB\xE5\xBC\x80\xE5\x85\xB3"); /* 旋转调亮度 · 点击开关 */
+        lv_label_set_text(d->icon, device_icons[d->focus]);
+        lv_label_set_text(d->label_hint, "\xE7\x82\xB9\xE5\x87\xBB\xE5\xBC\x80\xE5\x85\xB3"); /* 点击开关 */
     }
 }
 
@@ -522,9 +511,6 @@ static void pg_hass_create(page_t *p)
     d->ac_temp = 26;
     d->ac_fan = 0;
     d->ac_mode = 0;
-    for (int i = 0; i < HASS_DEVICE_NUM; i++) {
-        d->brightness[i] = 60;
-    }
     hass_ctrl_visual(d);
 
     motor_set_mode(MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
@@ -554,6 +540,7 @@ static void pg_hass_on_rotate(page_t *p, int32_t steps)
         last_cmd_tick = now;
         int dir = steps > 0 ? 1 : -1;
         if (d->focus == HASS_DEV_AC) {
+            /* 只有空调用旋转调节: 温度±1 / 风速档位循环 */
             if (d->ac_mode == 0) {
                 /* 温度模式: 本地模拟 16..30, 每事件 1 度 */
                 d->ac_temp += dir;
@@ -567,16 +554,10 @@ static void pg_hass_on_rotate(page_t *p, int32_t steps)
             }
             d->dot_deg += dir * 5;
             hass_ctrl_visual(d);
-        } else {
-            /* 灯: 本地亮度 0..100, 每事件 ±10, 发布亮度步进动作 */
-            d->brightness[d->focus] += dir * 10;
-            if (d->brightness[d->focus] < 0) d->brightness[d->focus] = 0;
-            if (d->brightness[d->focus] > 100) d->brightness[d->focus] = 100;
-            mqtt_ha_publish_action(d->focus, dir > 0 ? "bright_up" : "bright_down");
-            hass_ctrl_visual(d);
+            hass_indic_update(d);
+            pm_shake();
         }
-        hass_indic_update(d);
-        pm_shake();
+        /* 灯只有开/关: 转动无动作 */
     } else {
         /* 无级循环: 灯光->空调->风扇->洗衣机->灯光... */
         d->focus = ((d->focus + steps) % HASS_DEVICE_NUM + HASS_DEVICE_NUM) % HASS_DEVICE_NUM;

@@ -58,9 +58,9 @@ typedef struct {
 } ha_trig_t;
 
 static const ha_trig_t ha_trigs[] = {
-    {0, "on"}, {0, "off"}, {0, "bright_up"}, {0, "bright_down"},
-    {1, "on"}, {1, "off"}, {1, "bright_up"}, {1, "bright_down"},
-    {2, "on"}, {2, "off"}, {2, "bright_up"}, {2, "bright_down"},
+    {0, "on"}, {0, "off"},
+    {1, "on"}, {1, "off"},
+    {2, "on"}, {2, "off"},
     {3, "on"}, {3, "off"}, {3, "temp_up"}, {3, "temp_down"}, {3, "fan_up"}, {3, "fan_down"},
 };
 #define HA_TRIG_NUM (sizeof(ha_trigs) / sizeof(ha_trigs[0]))
