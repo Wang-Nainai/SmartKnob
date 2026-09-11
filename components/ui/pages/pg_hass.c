@@ -1,17 +1,21 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include "page_mgr.h"
 #include "motor.h"
 #include "mqtt.h"
 
 LV_FONT_DECLARE(lv_font_montserrat_26);
+LV_FONT_DECLARE(lv_font_montserrat_48);
 LV_FONT_DECLARE(lv_font_msyh_16);
 
 /* ============================================================
  * X-Knob 风格智能家居页 (无限循环, 与主菜单同架构)
  * - 4 设备 x 3 副本环形列表, 触摸可滑, 焦点跟随, 旋转连贯循环
- * - 控制视图: 全屏表盘(73 刻度 360°, 蓝色指针)
- *   旋转 = LEFT/RIGHT, 点击 = ON/OFF
+ * - 控制视图 (参考 X-Knob PlaygroundView 重做):
+ *   渐变光晕圆盘 + 刻度环 + 底部60°状态弧 + 旋转方向点
+ *   中央电源图标 + 已开启/已关闭状态字
+ *   旋转 = 方向点绕盘移动 + LEFT/RIGHT, 点击 = 开/关切换
  * ============================================================ */
 
 #define HASS_DEVICE_NUM 4
@@ -47,11 +51,16 @@ typedef struct {
     lv_obj_t *icons[ROWS_N];
     lv_obj_t *infos[ROWS_N];
     lv_obj_t *ctrl_scr;     /* 控制视图 */
-    lv_obj_t *scale;        /* 控制视图表盘 */
-    lv_obj_t *needle;
-    lv_obj_t *label_name;
-    lv_obj_t *label_last;
-    lv_timer_t *timer;
+    lv_obj_t *glow;         /* 表盘背景渐变圆 */
+    lv_obj_t *ring;         /* 外圈细弧 */
+    lv_obj_t *scale;        /* 刻度环 */
+    lv_obj_t *state_arc;    /* 底部 60° 状态弧 */
+    lv_obj_t *dot;          /* 旋转方向指示点 */
+    lv_obj_t *icon_power;   /* 中央电源图标 */
+    lv_obj_t *label_state;  /* 已开启/已关闭 */
+    lv_obj_t *label_name;   /* 设备名 */
+    int dot_deg;            /* 方向点角度 (0=12点方向, 顺时针) */
+    bool dev_on[HASS_DEVICE_NUM];  /* 本地模拟的开/关状态 */
 } hass_data_t;
 
 static hass_data_t *s_hass;   /* 行回调取实例用 (单实例页面) */
@@ -166,14 +175,37 @@ static void hass_scroll_wrap_cb(lv_event_t *e)
     }
 }
 
+/* 控制视图状态刷新: 名字/状态字/图标/弧段/光晕随 开关状态 联动 */
+static void hass_ctrl_visual(hass_data_t *d)
+{
+    bool on = d->dev_on[d->focus];
+    lv_label_set_text(d->label_name, device_names[d->focus]);
+    lv_label_set_text(d->label_state, on ? "\xE5\xB7\xB2\xE5\xBC\x80\xE5\x90\xAF"   /* 已开启 */
+                                         : "\xE5\xB7\xB2\xE5\x85\xB3\xE9\x97\xAD"); /* 已关闭 */
+    lv_color_t c = lv_color_hex(on ? XK_COLOR_ACCENT : XK_COLOR_GRAY);
+    lv_obj_set_style_text_color(d->label_state, c, 0);
+    lv_obj_set_style_text_color(d->icon_power, c, 0);
+    lv_obj_set_style_bg_grad_color(d->glow, lv_color_hex(on ? 0x00329B : 0x181818), 0);
+    lv_arc_set_value(d->state_arc, on ? 1 : 0);
+}
+
+/* 方向点绕盘移动: 每档 5°, 0 = 12点方向, 顺时针为正 */
+static void hass_dot_update(hass_data_t *d)
+{
+    const float r = 95.0f;   /* 光晕圆边缘(88)与刻度尖端之间 */
+    float rad = (float)(d->dot_deg % 360) * 0.01745329f;
+    int32_t x = 120 + (int32_t)(r * sinf(rad)) - 5;
+    int32_t y = 162 - (int32_t)(r * cosf(rad)) - 5;
+    lv_obj_set_pos(d->dot, x, y);
+}
+
 static void hass_show_control(hass_data_t *d, bool ctrl)
 {
     d->in_control = ctrl;
     if (ctrl) {
-        char buf[64];
-        snprintf(buf, sizeof(buf), "%s / %d", device_names[d->focus], d->focus + 1);
-        lv_label_set_text(d->label_name, buf);
-        lv_label_set_text(d->label_last, "\xE7\x82\xB9\xE5\x87\xBB\x3A ON/OFF");
+        d->dot_deg = 0;
+        hass_ctrl_visual(d);
+        hass_dot_update(d);
         lv_obj_clear_flag(d->ctrl_scr, LV_OBJ_FLAG_HIDDEN);
         motor_set_mode(MOTOR_MODE_UNBOUND_NO_DETENTS, 0, 0);
     } else {
@@ -209,7 +241,7 @@ static void hass_row_cb(lv_event_t *e)
     pm_shake();
 }
 
-/* 控制视图点击 → ON/OFF */
+/* 控制视图点击 → 开/关切换 */
 static void hass_tap_cb(lv_event_t *e)
 {
     page_t *p = (page_t *)lv_event_get_user_data(e);
@@ -217,20 +249,12 @@ static void hass_tap_cb(lv_event_t *e)
     if (!d->in_control) {
         return;
     }
-    mqtt_ha_publish_cmd(device_names[d->focus], "ON/OFF");
-    mqtt_ha_publish_action(d->focus, "ON");
-    lv_label_set_text(d->label_last, "ON/OFF");
+    bool on = !d->dev_on[d->focus];
+    d->dev_on[d->focus] = on;
+    mqtt_ha_publish_cmd(device_names[d->focus], on ? "ON" : "OFF");
+    mqtt_ha_publish_action(d->focus, on ? "ON" : "OFF");
+    hass_ctrl_visual(d);
     pm_shake();
-}
-
-static void hass_timer_cb(lv_timer_t *t)
-{
-    hass_data_t *d = lv_timer_get_user_data(t);
-    if (!d->in_control) return;
-    int32_t pos = motor_get_position();
-    int32_t val = pos % 72;
-    if (val < 0) val += 72;
-    lv_scale_set_line_needle_value(d->scale, d->needle, 95, val);
 }
 
 static void pg_hass_create(page_t *p)
@@ -306,7 +330,7 @@ static void pg_hass_create(page_t *p)
         lv_obj_move_foreground(icon);
     }
 
-    /* ---- 控制视图 (全屏表盘) ---- */
+    /* ---- 控制视图 (X-Knob 风格表盘) ---- */
     d->ctrl_scr = lv_obj_create(p->root);
     lv_obj_remove_style_all(d->ctrl_scr);
     lv_obj_set_size(d->ctrl_scr, 240, 320);
@@ -318,50 +342,111 @@ static void pg_hass_create(page_t *p)
     lv_obj_set_user_data(d->ctrl_scr, p);
     lv_obj_add_flag(d->ctrl_scr, LV_OBJ_FLAG_HIDDEN);
 
+    /* 表盘背景: 垂直渐变圆, 开启时底部泛蓝光, 关闭时纯暗 (X-Knob 语言) */
+    lv_obj_t *glow = lv_obj_create(d->ctrl_scr);
+    d->glow = glow;
+    lv_obj_remove_style_all(glow);
+    lv_obj_set_size(glow, 176, 176);
+    lv_obj_set_pos(glow, 32, 74);
+    lv_obj_set_style_bg_color(glow, lv_color_hex(0x0B0B0B), 0);
+    lv_obj_set_style_bg_grad_color(glow, lv_color_hex(0x181818), 0);
+    lv_obj_set_style_bg_grad_dir(glow, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_bg_opa(glow, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(glow, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_color(glow, lv_color_hex(0x242424), 0);
+    lv_obj_set_style_border_width(glow, 1, 0);
+    lv_obj_clear_flag(glow, LV_OBJ_FLAG_CLICKABLE);
+
+    /* 外圈细弧 */
+    lv_obj_t *ring = lv_arc_create(d->ctrl_scr);
+    d->ring = ring;
+    lv_obj_set_size(ring, 216, 216);
+    lv_obj_set_pos(ring, 12, 54);
+    lv_arc_set_rotation(ring, 0);
+    lv_arc_set_bg_angles(ring, 0, 360);
+    lv_arc_set_value(ring, 0);
+    lv_obj_remove_style(ring, NULL, LV_PART_KNOB);
+    lv_obj_set_style_arc_width(ring, 0, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(ring, 1, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(ring, lv_color_hex(0x2E2E2E), LV_PART_MAIN);
+    lv_obj_remove_flag(ring, LV_OBJ_FLAG_CLICKABLE);
+
+    /* 刻度环: 73 根, 每 6 根一根长亮刻度 */
     lv_obj_t *scale = lv_scale_create(d->ctrl_scr);
     d->scale = scale;
-    lv_obj_set_pos(scale, 0, 50);
-    lv_obj_set_size(scale, 240, 240);
-    lv_obj_set_style_bg_color(scale, lv_color_hex(XK_COLOR_PANEL), 0);
-    lv_obj_set_style_radius(scale, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_size(scale, 216, 216);
+    lv_obj_set_pos(scale, 12, 54);
     lv_scale_set_mode(scale, LV_SCALE_MODE_ROUND_INNER);
     lv_scale_set_label_show(scale, false);
-    lv_obj_set_style_length(scale, 5, LV_PART_ITEMS);
-    lv_obj_set_style_line_width(scale, 1, LV_PART_ITEMS);
-    lv_obj_set_style_line_color(scale, lv_color_hex(0x4A4A4A), LV_PART_ITEMS);
-    lv_obj_set_style_length(scale, 12, LV_PART_INDICATOR);
-    lv_obj_set_style_line_width(scale, 2, LV_PART_INDICATOR);
-    lv_obj_set_style_line_color(scale, lv_color_hex(XK_COLOR_ACCENT), LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(scale, lv_color_hex(0x3A3A3A), LV_PART_MAIN);
-    lv_obj_set_style_arc_width(scale, 1, LV_PART_MAIN);
     lv_scale_set_total_tick_count(scale, 73);
-    lv_scale_set_major_tick_every(scale, 1);
+    lv_scale_set_major_tick_every(scale, 6);
     lv_scale_set_range(scale, 0, 72);
     lv_scale_set_angle_range(scale, 360);
-    lv_scale_set_rotation(scale, 270);
-
-    static lv_point_precise_t needle_points[2] = { {0, 0}, {0, 0} };
-    d->needle = lv_line_create(scale);
-    lv_line_set_points_mutable(d->needle, needle_points, 2);
-    lv_obj_set_style_line_width(d->needle, 8, 0);
-    lv_obj_set_style_line_rounded(d->needle, true, 0);
-    lv_obj_set_style_line_color(d->needle, lv_color_hex(XK_COLOR_BLUE), 0);
-    lv_scale_set_post_draw(scale, true);
-    lv_scale_set_line_needle_value(scale, d->needle, 95, 0);
-    /* scale 默认可点击且不冒泡, 会吞掉控制视图的"点击=ON/OFF" */
+    lv_scale_set_rotation(scale, 0);
+    lv_obj_set_style_length(scale, 7, LV_PART_ITEMS);
+    lv_obj_set_style_line_width(scale, 1, LV_PART_ITEMS);
+    lv_obj_set_style_line_color(scale, lv_color_hex(0x333333), LV_PART_ITEMS);
+    lv_obj_set_style_length(scale, 12, LV_PART_INDICATOR);
+    lv_obj_set_style_line_width(scale, 2, LV_PART_INDICATOR);
+    lv_obj_set_style_line_color(scale, lv_color_hex(0x606060), LV_PART_INDICATOR);
+    /* scale 默认可点击且不冒泡, 会吞掉控制视图的"点击=开关" */
     lv_obj_remove_flag(scale, LV_OBJ_FLAG_CLICKABLE);
 
-    d->label_name = lv_label_create(d->ctrl_scr);
-    lv_obj_set_style_text_color(d->label_name, lv_color_hex(XK_COLOR_TEXT), 0);
-    lv_obj_set_style_text_font(d->label_name, &lv_font_msyh_16, 0);
-    lv_obj_align(d->label_name, LV_ALIGN_TOP_MID, 0, 40);
+    /* 底部 60° 状态弧: 开=整段点亮, 关=熄灭 */
+    lv_obj_t *sa = lv_arc_create(d->ctrl_scr);
+    d->state_arc = sa;
+    lv_obj_set_size(sa, 216, 216);
+    lv_obj_set_pos(sa, 12, 54);
+    lv_arc_set_rotation(sa, 150);
+    lv_arc_set_bg_angles(sa, 0, 60);
+    lv_arc_set_range(sa, 0, 1);
+    lv_arc_set_value(sa, 0);
+    lv_obj_remove_style(sa, NULL, LV_PART_KNOB);
+    lv_obj_set_style_arc_width(sa, 4, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(sa, lv_color_hex(0x2E2E2E), LV_PART_MAIN);
+    lv_obj_set_style_arc_width(sa, 4, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(sa, lv_color_hex(XK_COLOR_ACCENT), LV_PART_INDICATOR);
+    lv_obj_remove_flag(sa, LV_OBJ_FLAG_CLICKABLE);
 
-    d->label_last = lv_label_create(d->ctrl_scr);
-    lv_obj_set_style_text_color(d->label_last, lv_color_hex(XK_COLOR_GRAY), 0);
-    lv_obj_set_style_text_font(d->label_last, &lv_font_msyh_16, 0);
-    lv_obj_align(d->label_last, LV_ALIGN_BOTTOM_MID, 0, -40);
+    /* 中央电源图标 + 状态字 */
+    lv_obj_t *icon_power = lv_label_create(d->ctrl_scr);
+    d->icon_power = icon_power;
+    lv_obj_set_style_text_color(icon_power, lv_color_hex(XK_COLOR_GRAY), 0);
+    lv_obj_set_style_text_font(icon_power, &lv_font_montserrat_48, 0);
+    lv_label_set_text(icon_power, LV_SYMBOL_POWER);
+    lv_obj_align(icon_power, LV_ALIGN_CENTER, 0, -20);
 
-    d->timer = lv_timer_create(hass_timer_cb, 50, d);
+    lv_obj_t *ls = lv_label_create(d->ctrl_scr);
+    d->label_state = ls;
+    lv_obj_set_style_text_color(ls, lv_color_hex(XK_COLOR_GRAY), 0);
+    lv_obj_set_style_text_font(ls, &lv_font_msyh_16, 0);
+    lv_label_set_text(ls, "\xE5\xB7\xB2\xE5\x85\xB3\xE9\x97\xAD");
+    lv_obj_align(ls, LV_ALIGN_CENTER, 0, 32);
+
+    /* 顶部设备名 */
+    lv_obj_t *name = lv_label_create(d->ctrl_scr);
+    d->label_name = name;
+    lv_obj_set_style_text_color(name, lv_color_hex(XK_COLOR_TEXT), 0);
+    lv_obj_set_style_text_font(name, &lv_font_msyh_16, 0);
+    lv_obj_align(name, LV_ALIGN_TOP_MID, 0, 32);
+
+    /* 底部操作提示 */
+    lv_obj_t *hint = lv_label_create(d->ctrl_scr);
+    lv_obj_set_style_text_color(hint, lv_color_hex(XK_COLOR_FAINT), 0);
+    lv_obj_set_style_text_font(hint, &lv_font_msyh_16, 0);
+    lv_label_set_text(hint, "\xE6\x97\x8B\xE8\xBD\xAC\xE8\xB0\x83\xE8\x8A\x82 \xC2\xB7 \xE7\x82\xB9\xE5\x87\xBB\xE5\xBC\x80\xE5\x85\xB3"); /* 旋转调节 · 点击开关 */
+    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -8);
+
+    /* 旋转方向指示点 (最后创建, 置顶) */
+    lv_obj_t *dot = lv_obj_create(d->ctrl_scr);
+    d->dot = dot;
+    lv_obj_remove_style_all(dot);
+    lv_obj_set_size(dot, 10, 10);
+    lv_obj_set_style_bg_color(dot, lv_color_hex(XK_COLOR_ACCENT), 0);
+    lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_clear_flag(dot, LV_OBJ_FLAG_CLICKABLE);
+
     motor_set_mode(MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
     hass_set_focus(d, 0, 0);
 }
@@ -371,7 +456,6 @@ static void pg_hass_destroy(page_t *p)
     s_hass = NULL;
     hass_data_t *d = p->data;
     if (d) {
-        if (d->timer) lv_timer_del(d->timer);
         free(d);
     }
     p->data = NULL;
@@ -390,7 +474,8 @@ static void pg_hass_on_rotate(page_t *p, int32_t steps)
         last_cmd_tick = now;
         mqtt_ha_publish_cmd(device_names[d->focus], steps > 0 ? "RIGHT" : "LEFT");
         mqtt_ha_publish_action(d->focus, steps > 0 ? "RIGHT" : "LEFT");
-        lv_label_set_text(d->label_last, steps > 0 ? "RIGHT" : "LEFT");
+        d->dot_deg += (int)steps * 5;
+        hass_dot_update(d);
         pm_shake();
     } else {
         /* 无级循环: 灯光->空调->风扇->洗衣机->灯光... */
