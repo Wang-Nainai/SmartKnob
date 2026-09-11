@@ -52,6 +52,7 @@ typedef struct {
     lv_obj_t *infos[ROWS_N];
     lv_obj_t *ctrl_scr;     /* 控制视图 */
     lv_obj_t *dial;         /* 圆环: 暗色轨道 + 16° 旋转指示弧 */
+    lv_obj_t *bezel;        /* 外围细刻度圈 (X-Knob 语言) */
     lv_obj_t *icon_circle;  /* 中央图标圆底 */
     lv_obj_t *icon;         /* 设备图标 */
     lv_obj_t *label_state;  /* 已开启/已关闭 */
@@ -353,6 +354,26 @@ static void pg_hass_create(page_t *p)
     lv_obj_set_style_arc_color(dial, lv_color_hex(0x1C1C1E), LV_PART_MAIN);
     lv_obj_set_style_arc_color(dial, lv_color_hex(0x48484A), LV_PART_INDICATOR);
     lv_obj_remove_flag(dial, LV_OBJ_FLAG_CLICKABLE);
+
+    /* 外围刻度圈: 73 根细刻度(每6根一根长亮), 与圆环同心, 当"表圈"用 */
+    lv_obj_t *bezel = lv_scale_create(d->ctrl_scr);
+    d->bezel = bezel;
+    lv_obj_set_size(bezel, 232, 232);
+    lv_obj_set_pos(bezel, 4, 52);
+    lv_scale_set_mode(bezel, LV_SCALE_MODE_ROUND_INNER);
+    lv_scale_set_label_show(bezel, false);
+    lv_scale_set_total_tick_count(bezel, 73);
+    lv_scale_set_major_tick_every(bezel, 6);
+    lv_scale_set_range(bezel, 0, 72);
+    lv_scale_set_angle_range(bezel, 360);
+    lv_scale_set_rotation(bezel, 0);
+    lv_obj_set_style_length(bezel, 5, LV_PART_ITEMS);
+    lv_obj_set_style_line_width(bezel, 1, LV_PART_ITEMS);
+    lv_obj_set_style_line_color(bezel, lv_color_hex(0x2E2E2E), LV_PART_ITEMS);
+    lv_obj_set_style_length(bezel, 10, LV_PART_INDICATOR);
+    lv_obj_set_style_line_width(bezel, 2, LV_PART_INDICATOR);
+    lv_obj_set_style_line_color(bezel, lv_color_hex(0x5A5A5A), LV_PART_INDICATOR);
+    lv_obj_remove_flag(bezel, LV_OBJ_FLAG_CLICKABLE);
 
     /* 内层深度圆: 极暗的微渐变, 制造表盘下沉感 */
     lv_obj_t *inner = lv_obj_create(d->ctrl_scr);
