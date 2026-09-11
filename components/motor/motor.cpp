@@ -511,42 +511,69 @@ static void haptic_update(void)
 }
 
 /* ---------------- FOC 校准持久化 (NVS) ----------------
- * 开环校准(方向探测 + 零电角测量)只在首次开机做, 结果存 NVS;
- * 之后每次上电 initFOC 直通, 开机时间 4.2s -> <1s。
- * 硬件不变则校准值永久有效; 换电机/传感器后从设置页清除重学。 */
+ * MT6701 工作在 ABZ 增量模式(无 Z 索引): 编码器计数以上电瞬间转轴位置为零点,
+ * 每次开机零参考都不同。zero_electric_angle 是"相对于本次开机计数零参考"的
+ * 偏移, 跨开机保存必然错位 —— 曾导致部分开机换向错误、电机失控疯转。
+ *
+ * 因此: 只持久化 sensor_direction(接线方向, 硬件属性, 开机间恒定);
+ * 零电角每次开机由 alignSensor() 重新锚定(保持 3pi/2 电角度 700ms 后测量)。
+ * 开机时间 4.2s(全流程) -> 约 1.5s(跳过方向探测)。
+ * 换电机/传感器后从设置页清除存档重学。 */
 #define MOTOR_CAL_NS "mcal"
+#define MOTOR_CAL_MAGIC 0x4B4D /* "MK" */
+#define MOTOR_CAL_VER 2
 
-static bool motor_cal_load(float *zangle, int8_t *dir)
+typedef struct {
+    uint16_t magic;
+    uint8_t ver;
+    int8_t dir; /* Direction::CW=+1 / CCW=-1 */
+} motor_cal_t;
+
+static bool motor_cal_load(int8_t *dir)
 {
     nvs_handle_t h;
     if (nvs_open(MOTOR_CAL_NS, NVS_READONLY, &h) != ESP_OK) {
         return false;
     }
-    size_t sz = sizeof(float);
-    bool ok = nvs_get_blob(h, "zangle", zangle, &sz) == ESP_OK;
-    ok = ok && nvs_get_i8(h, "dir", dir) == ESP_OK;
-    uint8_t valid = 0;
-    ok = ok && nvs_get_u8(h, "valid", &valid) == ESP_OK && valid == 1;
+    motor_cal_t c;
+    size_t sz = sizeof(c);
+    bool ok = nvs_get_blob(h, "cal", &c, &sz) == ESP_OK && sz == sizeof(c);
+    ok = ok && c.magic == MOTOR_CAL_MAGIC && c.ver == MOTOR_CAL_VER &&
+         (c.dir == 1 || c.dir == -1);
     nvs_close(h);
-    /* 合理性: 零电角在 (0, 2pi), 方向为 +-1 */
-    if (ok && (*zangle <= 0 || *zangle >= 2 * _PI || (*dir != 1 && *dir != -1))) {
-        ok = false;
+    if (ok) {
+        *dir = c.dir;
     }
     return ok;
 }
 
-static void motor_cal_save(float zangle, int8_t dir)
+static void motor_cal_save(int8_t dir)
 {
     nvs_handle_t h;
     if (nvs_open(MOTOR_CAL_NS, NVS_READWRITE, &h) != ESP_OK) {
         return;
     }
-    nvs_set_blob(h, "zangle", &zangle, sizeof(float));
-    nvs_set_i8(h, "dir", dir);
-    nvs_set_u8(h, "valid", 1);
-    nvs_commit(h);
+    motor_cal_t c = { .magic = MOTOR_CAL_MAGIC, .ver = MOTOR_CAL_VER, .dir = dir };
+    if (nvs_set_blob(h, "cal", &c, sizeof(c)) == ESP_OK) {
+        nvs_commit(h);
+        ESP_LOGI(TAG, "FOC direction saved to NVS: %d", dir);
+    }
     nvs_close(h);
-    ESP_LOGI(TAG, "FOC calibration saved: zangle=%.3f rad, dir=%d", zangle, dir);
+}
+
+static int8_t motor_cal_legacy_dir(void)
+{
+    /* 旧三键方案(zangle/dir/valid): 零电角因增量编码器不可跨开机复用, 只迁移方向 */
+    nvs_handle_t h;
+    if (nvs_open(MOTOR_CAL_NS, NVS_READONLY, &h) != ESP_OK) {
+        return 0;
+    }
+    int8_t dir = 0;
+    uint8_t valid = 0;
+    bool ok = nvs_get_u8(h, "valid", &valid) == ESP_OK && valid == 1 &&
+              nvs_get_i8(h, "dir", &dir) == ESP_OK;
+    nvs_close(h);
+    return (ok && (dir == 1 || dir == -1)) ? dir : 0;
 }
 
 void motor_clear_calibration(void)
@@ -669,30 +696,38 @@ esp_err_t motor_init(void)
         return ESP_ERR_INVALID_STATE;
     }
 
-    /* 校准持久化: 有存档直通(<1s), 无存档开环校准后保存.
-     * 这版 SimpleFOC 的 initFOC() 无参: 预先设好 sensor_direction /
-     * zero_electric_angle 时 alignSensor() 自动跳过开环校准 */
-    float cal_zangle = 0;
+    /* 校准持久化(见文件头说明): ABZ 为增量编码器, 零电角每次开机重新锚定,
+     * 只复用 NVS 中的接线方向跳过方向探测。 */
     int8_t cal_dir = 0;
-    bool have_cal = motor_cal_load(&cal_zangle, &cal_dir);
-    if (have_cal) {
+    if (!motor_cal_load(&cal_dir)) {
+        int8_t legacy = motor_cal_legacy_dir();
+        if (legacy != 0) {
+            motor_cal_save(legacy);
+            cal_dir = legacy;
+            ESP_LOGI(TAG, "migrated legacy FOC calibration (dir=%d)", legacy);
+        }
+    }
+    if (cal_dir != 0) {
         motor.sensor_direction = (Direction)cal_dir;
-        motor.zero_electric_angle = cal_zangle;
         if (!motor.initFOC()) {
-            ESP_LOGE(TAG, "initFOC failed (with saved calibration)");
+            ESP_LOGE(TAG, "initFOC failed (saved dir=%d)", cal_dir);
             return ESP_ERR_INVALID_STATE;
         }
-        ESP_LOGI(TAG, "initFOC: skipped open-loop calibration (saved zangle=%.3f, dir=%d)",
-                 cal_zangle, cal_dir);
+        ESP_LOGI(TAG, "initFOC: fast boot (dir=%d from NVS, zero re-anchored=%.3f rad)",
+                 cal_dir, motor.zero_electric_angle);
     } else {
         if (!motor.initFOC()) {
             ESP_LOGE(TAG, "initFOC failed: sensor not responding, check MT6701 wiring");
             return ESP_ERR_INVALID_STATE;
         }
-        if (motor.zero_electric_angle > 0 && motor.sensor_direction != Direction::UNKNOWN) {
-            motor_cal_save(motor.zero_electric_angle, (int8_t)motor.sensor_direction);
+        /* 方向探测质量门控: 极对数校验失败说明探测过程有毛刺, 不可信, 不保存 */
+        if ((motor.sensor_direction == Direction::CW ||
+             motor.sensor_direction == Direction::CCW) &&
+            motor.pp_check_result) {
+            motor_cal_save((int8_t)motor.sensor_direction);
         } else {
-            ESP_LOGW(TAG, "auto calibration produced invalid results, not saved");
+            ESP_LOGW(TAG, "direction detection unreliable (pp_check=%d), not saved - will recalibrate next boot",
+                     (int)motor.pp_check_result);
         }
     }
 

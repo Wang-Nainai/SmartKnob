@@ -1,237 +1,1156 @@
 # SmartKnob 软件架构
 
-本文档记录项目**目标架构**、**阶段推进记录**与**验证状态**。
-验证状态统一使用：
-- `编译验证：通过/未通过`
-- `静态分析：通过/未通过`
-- `代码验证：通过`（指代码层面可确认的数据流/接口/竞态）
-- `硬件实测：尚未验证`（无实体硬件时一律写此状态）
+本文档以当前仓库中的实际代码、`sdkconfig`、Kconfig 和组件依赖为准，描述 SmartKnob 的真实软件架构、重要设计决策、当前实现状态和防回退约束。
+
+文档状态标记：
+
+- `代码验证`：可从当前代码的数据流、接口和生命周期直接确认。
+- `静态分析`：通过源码、配置和构建产物确认，但未在实体设备上执行该场景。
+- `编译验证`：工程能够完成构建。
+- `硬件实测`：必须有实体硬件上的可复核结果；仓库当前没有完整硬件测试报告，因此不把代码注释中的历史“实测”自动扩大成当前版本已全量验证。
 
 ---
 
-## 1. 目标架构
+## 1. 项目定位
 
-```
-                     SmartKnob
-                         │
-        ┌────────────────┼────────────────┐
-        │                │                │
-      Motor            Input              UI
-        │                │                │
-      Haptic         Gesture/Event       LVGL
-        │                │                │
-        └──────────── Event / State ──────┘
-                         │
-            ┌────────────┼────────────┐
-            │            │            │
-          SCD40         MQTT         Web
-                         │
-                        HA
-```
+SmartKnob 是一台可联网的力反馈智能旋钮，当前软件提供四类能力：
 
-## 2. 核心原则
+1. 本地终端：LVGL UI、BLDC 力反馈、触摸交互、环境监测、设置和系统监控。
+2. PC 控制器：通过 BLE HID 提供音量、媒体控制、鼠标滚轮和相对鼠标移动接口。
+3. Home Assistant 控制器：使用 MQTT、HA MQTT Discovery、动作触发器和下行命令。
+4. 浏览器管理台：提供 WiFi/MQTT 配置、状态、环境历史、OTA、重启和恢复出厂入口。
 
-1. **Motor 单任务独占**（Phase 1 已完成）：
-   只有 `motor_task` 可以调用 `BLDCMotor / BLDCDriver / Encoder / loopFOC / move`。
-   其它模块只能：投递命令（`motor_cmd_queue`）+ 读状态快照（volatile）。
-2. **输入与 UI 解耦**：
-   旋钮原始位置 → `input` 组件 → 标准化事件（`knob_event_t`）→ 队列 → UI 消费。
-   UI 不直接轮询 motor 位置做手势。
-3. **UI 不直接操作电机**：
-   UI 只能调 `motor_set_mode* / motor_shake / motor_disable`（均为命令投递）。
-4. **实时性隔离**：
-   WiFi/MQTT/SCD40/Web/BLE 断网或阻塞不得影响 Motor 与 UI。
+设备没有物理按键，交互基础是旋钮旋转、触摸、水平和垂直触摸手势，以及受页面白名单约束的快速逆时针甩动返回。
 
-## 3. 输入交互模型（设计决策）
+---
 
-硬件输入 = **旋钮 + 触摸屏**。
+## 2. 硬件平台
 
-| 动作 | 事件 | 用途 |
-|---|---|---|
-| 旋转 | `KNOB_EVENT_ROTATE`（方向 + 步数） | 浏览焦点 / 调节数值 |
-| 触摸点击 | LVGL 原生 tap 事件 | 确认 / 选择 / 进入 |
-| 状态栏返回键 | `on_back` | 返回上一页 |
+### 2.1 当前代码与配置基线
 
-**设计决策（BUG-003）**：旧系统用"快旋 3 步/250ms = 确认、反快旋 = 返回"手势，
-误判风险高。本项目具备触摸屏，确认/返回走触摸，旋转只负责浏览/调节。
-
-## 4. 页面结构（当前）
-
-```
-开机 → 启动动画页(2s) → 主菜单(X-Knob 聚焦展开列表)
-  ├─ S-Dial 电脑控制   BLE HID: 旋转=音量/滚轮, 点击=播放暂停, 上下曲
-  ├─ 手感体验          11 种力反馈模式, 点击切换, 表盘+越界红弧
-  ├─ 智能家居          设备列表 → 控制视图(旋转=LEFT/RIGHT, 点击=ON/OFF)
-  ├─ 环境              CO2 仪表 + 等级 + 温湿度
-  ├─ 设置              亮度/熄屏时长(旋转调节, 点击保存, NVS)
-  └─ 系统              固件/网络信息 → 工厂测试页
-SoftAP 配网页          WiFi 超时自动弹出(二维码+热点名+IP)
-```
-
-状态栏：返回键(子页显示) + 页面标题 + WiFi/BLE/MQTT 图标 + 时间。
-
-## 5. 阶段推进记录
-
-| 阶段 | 内容 | 状态 |
-|---|---|---|
-| Phase 0 | 基线（git 独立仓库 / sdkconfig.defaults / README / 现状审计） | ✅ |
-| Phase 1 | Motor 命令队列 + 单任务独占 + 非阻塞 shake + disable | ✅ |
-| Phase 2 | Input 组件（旋钮 ROTATE 事件，去抖/去重/复位） | ✅ |
-| Phase 3 | 统一事件消费 + 触摸优先导航 | ✅ |
-| Phase 4 | X-Knob 风格 UI 重构 + 工厂测试页 | ✅ |
-| Phase 5 | app_state 传感器单一数据源 | ✅ |
-| Phase 6 | 实时性隔离（motor 独占 core1，其余钉 core0） | ✅ |
-| Phase 7 | 配置统一（NVS "webcfg" 单一命名空间） | ✅ |
-| Phase 8 | LED 连接状态指示 | ✅ |
-| 触摸专项 | 自研 XPT2046 驱动（店家轴向约定 + 标定 + 诊断） | ✅ |
-| S-Dial 专项 | BLE HID 电脑控制 + 分区表 3MB + otadata 修复 | ✅ |
-| 配网专项 | SoftAP 回退（热点+二维码+自动退出）+ STA 无限重连 | ✅ |
-| Web v2 | 全功能管理页（电机/显示/LED/BLE/恢复出厂） | ✅ |
-| HA 双向 | device_automation 触发器 + cmnd 命令通道 | ✅ |
-
-所有阶段：编译验证通过、静态分析通过；**硬件实测：尚未验证**。
-
-## 6. 跨模块数据流（现状）
-
-```
-motor_task(core1): Encoder → loopFOC → haptic_update → snap_position(volatile)
-input_task(core0): 轮询 snap_position → knob_event_t → 队列
-LVGL_task(core0):  消费 knob_event_t + LVGL 触摸事件 → 页面导航
-                   → motor_set_mode* / motor_shake（命令队列）
-scd40_task(core0): I2C → app_state 快照 → UI 环境页 / MQTT publish / Web status
-wifi:       STA 无限重连 + SoftAP 回退 → app_state 状态 → UI 状态栏/配网页
-mqtt:       传感器遥测 + HA device_automation 触发器 + smartknob/cmnd 命令
-webcfg:     HTTP 管理页(状态/控制/配置/OTA/恢复出厂) + NVS
-blehid:     BLE HID(音量/媒体/滚轮) → 状态栏图标
-```
-
-## 7. 任务与实时性隔离（现状）
-
-| 任务 | 核 | 优先级 | 说明 |
-|---|---|---|---|
-| motor | core1 | 2 | 唯一操作 BLDCMotor；1ms 周期 |
-| LVGL | core0 | 2 | 渲染 + 页面 + 输入消费 |
-| input | core0 | 1 | 轮询位置快照 → 事件队列 |
-| scd40 | core0 | 3 | I2C 轮询 → app_state |
-| NimBLE host | core0 | 高 | BT 协议栈（`BT_NIMBLE_PINNED_TO_CORE=0`） |
-| wifi / mqtt / httpd | core0 | — | 系统任务 |
-
-核心保障：**motor 独占 core1**，其余全部钉 core0。
-
-## 8. 模块清单（现状）
-
-```
-components/
-  motor/      电机控制 + 力反馈引擎(单任务独占)
-  input/      旋钮输入 → ROTATE 事件
-  app_state/  传感器/WiFi/AP 共享状态单一数据源
-  blehid/     BLE HID 设备(NimBLE): 电脑音量/媒体/滚轮
-  ui/         页面系统 + 状态栏 + 工厂测试 + 配网页
-  display/    ST7789 + XPT2046 裸驱动(自研,含标定/诊断) + LVGL 移植
-  scd40/      SCD40 驱动
-  wifi/       WiFi STA(无限重连) + SoftAP 配网回退
-  mqtt_ha/    Home Assistant: 遥测 + 触发器发现 + cmnd 命令
-  webcfg/     Web 管理页(状态/控制/配置/OTA/恢复出厂) + NVS
-  led/        WS2812 状态灯(互斥保护)
-```
-
-## 9. BLE HID 电脑控制（S-Dial，仿 X-Knob Surface Dial）
-
-- 协议：标准 BLE HID over GATT（HID Service 0x1812 + Report Map +
-  Consumer Control Report(ID1) + Mouse Report(ID2) + Battery），设备名 `SmartKnob`。
-- 免驱：Windows/macOS 蓝牙设置直接配对，绑定持久化（NVS），断线自动重连广播。
-- 能力：音量加减/静音/播放暂停/上一首/下一首（消费控制）、滚轮与相对移动（鼠标）。
-- 页面交互（`pg_pcdial`）：旋转=音量/滚轮（页面内切换模式），
-  点中心=播放暂停，底部按钮=上下曲；状态栏蓝牙图标显示连接状态。
-
-## 10. SoftAP 配网回退（WiFi 超时自动开热点）
-
-```
-开机 → STA 连接(无限重连, 最长等 WIFI_AP_FALLBACK_TIMEOUT_SEC=90s)
-  ├─ 连上 → 正常运行
-  └─ 超时 → wifi_ap_fallback_start():
-       APSTA 模式, 热点 SmartKnob-XXXX(MAC尾缀),
-       main 调 webcfg_start() → httpd 在 AP/STA 网段均可达,
-       UI 500ms 轮询自动弹出 PAGE_APCFG(热点名+二维码+IP)
-  用户连热点 → 浏览器扫码/输 IP → 管理页改 WiFi
-  保存 → STA 新凭据重连(热点保持) → GOT_IP
-       → wifi_ap_fallback_stop()(热点关闭) → 配网页自动退出 → MQTT 接上
-```
-
-- Kconfig：`WIFI_AP_FALLBACK_ENABLE/TIMEOUT_SEC/AP_PASSWORD`
-- 配网页可返回键关闭（`ui_apcfg_set_dismissed`），热点保持到配网成功
-
-## 11. Web 管理页（STA 与 AP 模式均可用）
-
-- 状态页（5s 自动刷新）：IP/RSSI/WiFi/MQTT/热点/BLE HID/CO2/温湿度/
-  电机模式与位置/亮度/熄屏/剩余内存/版本/运行时长
-- 控制端点 `POST /api/set`：motor_mode / shake / estop /
-  brightness / timeout / led(RRGGBB) / ble_disconnect
-- 配置：WiFi/MQTT（NVS 持久化，保存后自动重连）
-- OTA 固件上传；重启；恢复出厂（清 NVS + 重启）
-- 并发保护：webcfg_start 临界区守卫（app_main 与 WiFi 事件任务可能并发调用）
-
-## 12. Home Assistant 双向控制
-
-### 12.1 通道总览
-
-```
-┌──────────┐   MQTT    ┌────────────┐   集成/Zigbee   ┌──────────┐
-│ SmartKnob│ ─────────→│ Home       │ ──────────────→ │ 真实设备  │
-│          │←───────── │ Assistant  │ ←────────────── │ 灯/风扇…  │
-└──────────┘           └────────────┘                 └──────────┘
- 上行1: 传感器遥测(co2/temp/rh)     [自动发现]
- 上行2: smartknob/action 动作事件   [device_automation 触发器自动发现]
- 下行:  smartknob/cmnd/# 命令      [shake / mode / led]
-```
-
-### 12.2 旋钮 → HA：设备自动化触发器（已实现）
-
-旋钮向 HA 发布 16 个 `device_automation` 触发器发现配置
-（灯光/空调/风扇/洗衣机 × on/off/left/right），动作主题 `smartknob/action`。
-
-**HA 侧零 YAML**：设置 → 设备与服务 → SmartKnob 设备 → 16 个可绑定动作 →
-自动化界面可视化绑定到任意真实实体。
-
-例（旋钮"灯光 ON"控制真实灯泡）：
-`自动化: 触发=设备(SmartKnob) light_on → 动作=灯.toggle`
-
-### 12.3 HA → 旋钮：命令通道（已实现）
-
-| 主题 | 载荷 | 效果 |
-|---|---|---|
-| smartknob/cmnd/shake | 任意 | 电机振动 |
-| smartknob/cmnd/mode | 0-10 | 切换力反馈模式 |
-| smartknob/cmnd/led | RRGGBB | LED 颜色 |
-
-例：HA 自动化(门铃)调 `mqtt.publish` 主题 `smartknob/cmnd/shake`。
-
-### 12.4 规划：设备状态回显 + 实体映射（Tier 3，未实现）
-
-- **方案 A（推荐）**：Web 增"HA 实体映射"配置；旋钮订阅 HA statestream
-  (`homeassistant/state/<entity>/state`) 回显真实设备状态；旋转映射亮度命令。
-- **方案 B**：HA 建 MQTT 虚拟实体(command/state 指向 smartknob/...)
-  + 模板自动化同步真实设备；旋钮直接读写该主题。
-
-## 13. 工具链（tools/）
-
-| 脚本 | 用途 |
+| 部件 | 当前实际配置 |
 |---|---|
-| `build.ps1` | 一键构建（含完整 ESP-IDF 环境变量） |
-| `gen_msyh_font.py` | 中文字库生成：扫描 UI 文案 → msyh.ttc → LVGL 4bpp。**新增文案后重跑** |
-| `check_glyphs.py` | 校验 UI 用字是否全部被字库覆盖 |
+| MCU | ESP32-S3 N16R8，16 MB Flash，8 MB PSRAM |
+| CPU | 当前 `CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ=160`，不是 240 MHz |
+| 软件栈 | ESP-IDF 5.5.5，LVGL 9.2.0，esp_simplefoc 1.4.1 |
+| LCD | ST7789，240 x 320，竖屏，RGB565 |
+| LCD SPI | SPI2，80 MHz，双 DMA 缓冲；每缓冲 240 x 30 像素 |
+| 触摸 | XPT2046，与 LCD 共用 SPI2，片选 GPIO14，SPI 1 MHz |
+| 电机 | 2804 BLDC，7 极对，SimpleFOC 3PWM，供电 12 V，电压限幅 5 V |
+| 编码器 | MT6701 ABZ，A=GPIO7，B=GPIO4，PPR=1024，硬件四倍频 CPR=4096 |
+| 环境传感器 | SCD40，I2C0，100 kHz，SDA=GPIO5，SCL=GPIO6 |
+| 状态灯 | WS2812，RMT，GPIO48 |
 
-## 14. 字库管线（lv_font_msyh_16）
+LCD 引脚：SCLK=GPIO12，MOSI=GPIO11，MISO=GPIO13，DC=GPIO9，RST=GPIO8，CS=GPIO10，背光=GPIO21。
 
-- 格式：LVGL FMT_TXT / PLAIN 4bpp / SPARSE_TINY（unicode_list 升序）
-- 度量：`ofs_y = ascent - bbox_top - box_h`（与 lv_draw_label 定位公式一致），
-  `adv_w` 单位 1/16 像素
-- 字符集：自动 = UI 全部用字 + ASCII + ° ·；当前 215 字形
+### 2.2 触摸坐标与校准
 
-## 15. 触摸子系统（自研 XPT2046 驱动）
+- 自研 XPT2046 裸驱动采用该面板实际接线约定的命令字：`0xD0` 读横轴 X，`0x90` 读纵轴 Y。
+- 当前 `sdkconfig` 为 `TOUCH_SWAP_XY=n`、`TOUCH_MIRROR_X=y`、`TOUCH_MIRROR_Y=y`，用于未经过四点校准时的基础映射。
+- 触摸校准由 `pg_tcal` 完成，以 `x' = a*rx + b*ry + c`、`y' = d*rx + e*ry + f` 做最小二乘仿射拟合，4 点残差超过 30 px 则重来。
+- 校准矩阵以 blob `m6` 存储在 NVS namespace `touchcal`。
+- 开机若存在有效触摸校准，直接加载；否则启动页进入四点校准向导。
+- 触摸轮询发生在 LVGL indev 回调中，与 LVGL 刷屏处于同一任务，避免跨任务并发访问同一 SPI 总线。
+- 触摸异常时通过 z1/z2 总线无效判定、原始坐标 50..4045 窗口、双读一致性和自适应静息压力基线抑制幽灵触摸。
 
-- 店家实测约定：`0xD0=横轴(X), 0x90=纵轴(Y)`；`0xB0=Z1, 0xC0=Z2`
-- 压力判定 `z = z1+4095-z2`（阈值 `TOUCH_Z_THRESHOLD`）；总线异常防护
-- 标定 Kconfig：`TOUCH_X/Y_MIN/MAX` + `SWAP_XY/MIRROR_X/MIRROR_Y`
-- 诊断：开机 selftest 日志 + `display_touch_get_raw()`（工厂测试实时显示）
-- 轮询仅在 LVGL 任务 indev 回调内，与刷屏同任务串行
+---
+
+## 3. 软件分层
+
+```
+main
+  ├─ app_state       环境/WiFi/AP 共享只读快照
+  ├─ display         ST7789 + XPT2046 + LVGL port
+  ├─ ui              page_mgr + pages + status bar + font
+  ├─ input           motor snapshot -> knob_event_t
+  ├─ motor           BLDCMotor 唯一所有者 + haptic command queue
+  ├─ scd40           CO2/温度/湿度采集
+  ├─ env_hist        PSRAM 双环形历史缓冲
+  ├─ sysmon          FreeRTOS/内存采样
+  ├─ wifi            STA 无限重连 + SoftAP 配网回退
+  ├─ blehid          NimBLE BLE HID
+  ├─ mqtt_ha         MQTT / HA Discovery / 下行命令
+  ├─ webcfg          HTTP + NVS 配置 + OTA
+  └─ led             WS2812 状态灯
+```
+
+组件依赖尽量单向。例如 `wifi` 直接读取 NVS `webcfg`，避免 `wifi -> webcfg` 循环依赖；HTTP 服务由 `main` 启动。
+
+---
+
+## 4. 总体数据流
+
+```
+MT6701 ABZ
+   ↓
+motor_task(core1)
+   ↓ volatile position/mode/seq snapshot
+input_task(core0)
+   ↓ knob_event_t + event queue
+LVGL task(core0)
+   ↓ page_mgr -> 当前 page
+页面 UI / motor command queue / MQTT / BLE / display APIs
+```
+
+环境链路：
+
+```
+SCD40(I2C0)
+   ↓ main.c scd40_task(core0)
+app_state 快照  +  MQTT 遥测  +  env_hist PSRAM 环形缓冲
+   ↓             ↓                  ↓
+UI 环境页       Home Assistant      设备趋势图 / Web 趋势图
+```
+
+所有跨任务 Motor 控制都通过 Motor 命令队列 `s_cmd_queue`，所有跨任务 Motor 状态读取都通过 volatile 快照和序列号。
+
+### 4.1 当前启动顺序
+
+```
+nvs_flash_init
+  ↓
+app_state_init
+  ↓
+sysmon_init（创建后等待页面使能）
+  ↓
+led_init
+  ↓
+display_init
+  ↓
+motor_init
+  ↓
+smartknob_ui_init
+  ↓
+knob_input_init
+  ↓
+scd40_init + periodic measurement + scd40_task
+  ↓
+wifi_init
+  ↓
+blehid_init
+  ↓
+coex preference + SNTP
+  ↓
+webcfg_start
+  ↓
+wifi_wait_connected / SoftAP fallback
+  ↓
+mqtt_ha_init
+  ↓
+主循环 heap 水位监控
+```
+
+WiFi 驱动必须先于 BLE 初始化，避免 BLE 先占用内部 DMA 内存导致 `esp_wifi_init()` 的 `NO_MEM` 崩溃。HTTP server 由 `app_main` 启动，不放在 WiFi 事件回调中。
+
+---
+
+## 5. 核心设计原则
+
+1. Motor 所有权唯一：只有 `motor_task` 可以直接访问 `BLDCMotor`、`BLDCDriver`、Encoder、`loopFOC()` 和 `move()`。
+2. 外部模块只能投递 Motor 命令和读取状态快照，禁止直接修改 `motor.mode`、`motor.target` 或调用 `motor.loopFOC()` / `motor.move()`。
+3. Input 不直接读硬件编码器，而是消费 Motor 发布的位置快照。
+4. UI 不直接访问 Motor 底层对象；交互页面通过 `motor_set_mode*`、`motor_set_position`、`motor_shake`、`motor_disable` 投递命令。
+5. page_mgr 是唯一页面栈和生命周期管理者。
+6. 页面切换、模式重置和位置强制设置必须同步 Input 基准，不能靠简单清零掩盖幽灵旋转。
+7. 高频路径避免阻塞式网络、长 delay、大块分配和大日志。
+8. 网络任务不得阻塞 Motor FOC；UI 任务不得执行耗时网络同步操作。
+
+---
+
+## 6. Motor 架构
+
+### 6.1 所有权
+
+`components/motor/motor.cpp` 同时拥有硬件对象和当前 haptic 配置。
+
+唯一允许触碰 SimpleFOC 对象的任务：
+
+```text
+motor_task
+```
+
+唯一任务内部操作：
+
+```text
+motor.loopFOC()
+motor.move()
+motor.init()
+motor.initFOC()
+motor.PID_velocity.*
+```
+
+其他组件只能通过 `include/motor.h` 中的 API 投递命令或读取快照。
+
+### 6.2 Command Queue
+
+命令队列：
+
+```text
+static QueueHandle_t s_cmd_queue
+长度：8
+```
+
+命令类型：
+
+```text
+MOTOR_CMD_SET_MODE
+MOTOR_CMD_SET_MODE_RANGE
+MOTOR_CMD_SET_POSITION
+MOTOR_CMD_SHAKE
+MOTOR_CMD_DISABLE
+```
+
+公共 API：
+
+```text
+motor_set_mode
+motor_set_mode_range
+motor_set_position
+motor_shake
+motor_disable
+```
+
+命令入队由任意任务调用。`post_cmd()` 最终执行 `xQueueSend(..., pdMS_TO_TICKS(20))`，队列满时最多等待 20 ms 后记录 warning 并丢命令。因此它是有界等待，不是严格意义上的零等待非阻塞 API；当前 20 ms 是需要在实时性审计中关注的边界。
+
+Motor 对外状态：
+
+```text
+motor_get_position
+motor_get_mode
+motor_get_angle_offset_deg
+motor_is_ready
+motor_get_mode_seq
+```
+
+`motor_get_mode_seq()` 在模式切换或位置强制设置时递增，是 Input 防幽灵旋转的核心同步信号。
+
+### 6.3 任务与实时性
+
+当前 `motor_task`：
+
+| 项目 | 当前值 |
+|---|---|
+| Core | `CONFIG_MOTOR_TASK_CORE=1` |
+| 优先级 | 2 |
+| 栈 | 4096 字节 |
+| 调度周期 | 约 1 ms，`vTaskDelay(pdMS_TO_TICKS(1))` |
+| 每周期顺序 | 排空命令队列 -> `loopFOC()` -> disable/shake/haptic |
+
+`app_main`、LVGL、Input、SCD40、Sysmon 均固定在 core0；NimBLE host 和 WiFi task 也配置在 core0。Motor 独占 core1 是当前实时隔离策略。
+
+### 6.4 当前 12 种手感模式
+
+`motor_mode_t` 当前有 12 个模式：
+
+| # | 枚举 | 当前显示/用途 |
+|---|---|---|
+| 1 | `MOTOR_MODE_UNBOUND_NO_DETENTS` | 无边界无制动 |
+| 2 | `MOTOR_MODE_BOUND_NO_DETENTS` | 有边界无制动，范围 0..10 |
+| 3 | `MOTOR_MODE_MULTI_TURN_NO_DETENTS` | 多圈无制动，范围 0..72 |
+| 4 | `MOTOR_MODE_ON_OFF` | 开关模式，0..1 |
+| 5 | `MOTOR_MODE_AUTO_RETURN_CENTER` | 自动回中 |
+| 6 | `MOTOR_MODE_FINE_NO_DETENTS` | 精细无制动，约 1 度/档，范围 0..255 |
+| 7 | `MOTOR_MODE_FINE_DETENTS` | 精细有制动，约 1 度/档，范围 0..255 |
+| 8 | `MOTOR_MODE_COARSE_STRONG_DETENTS` | 粗略强制动，约 8.2258 度/档，范围 0..31 |
+| 9 | `MOTOR_MODE_COARSE_WEAK_DETENTS` | 粗略弱制动，约 8.2258 度/档，范围 0..31 |
+| 10 | `MOTOR_MODE_MAGNETIC_DETENTS` | 磁性制动，范围 0..31 |
+| 11 | `MOTOR_MODE_RETURN_CENTER_WITH_DETENTS` | 回中带制动，范围 -6..6 |
+| 12 | `MOTOR_MODE_UNBOUNDED_DETENTS` | 无边界棘轮，列表浏览，约 8.2258 度/档 |
+
+磁性制动模式的 4 个特殊吸附点当前为 `{2, 10, 21, 22}`。
+
+当前已知冲突：`pg_menu.c` 的菜单副标题仍写“11 种手感模式”，但 `motor_get_mode_count()` 和实际枚举均为 12。
+
+### 6.5 保护与手感算法
+
+| 保护/算法 | 当前实际值 |
+|---|---|
+| 失控速度保护 | `abs(motor.shaft_velocity) > 60 rad/s` 时 `motor.move(0)` |
+| 死区 | `DEAD_ZONE_DETENT_PERCENT=0.2`，同时受 1 度上限约束 |
+| 有界端点 | 出界时 `PID_velocity.P = endstop_strength_unit * 4` |
+| 怠速回中 | EWMA alpha=0.001，速度阈值 0.05 rad/s，500 ms 后开始，最大 5 度，中心修正 alpha=0.0005 |
+| Shake | 非阻塞状态机 `SHAKE_POS -> SHAKE_NEG -> SHAKE_IDLE` |
+| Shake 去重 | 正在抖动时忽略新请求 |
+| Shake 高速抑制 | 速度大于 15 rad/s 时忽略 Shake，避免对抗快转 |
+| Disable | 置 `motor_control_enabled=false`，清 Shake 并 `move(0)` |
+| Disable 退出 | 下一次模式切换会重新 `motor_control_enabled=true` |
+
+Shake 不是 `delay()`，也不会在 UI 线程直接操作 BLDCMotor。
+
+### 6.6 FOC 校准与 NVS
+
+MT6701 工作在 ABZ 增量模式（无 Z 索引引脚），编码器计数以上电瞬间转轴位置为零点，每次开机零参考都不同。`zero_electric_angle` 是相对于本次开机计数零参考的偏移（`electricalAngle() = normalize(dir * pole_pairs * getMechanicalAngle() - zero_electric_angle)`），**跨开机保存必然错位**，曾导致部分开机换向错误、电机失控疯转（BUG-021）。
+
+Motor 校准 namespace：
+
+```text
+mcal
+```
+
+键：
+
+```text
+cal  blob {magic u16=0x4B4D, ver u8=2, dir i8}  单条目原子写入
+```
+
+只持久化接线方向 `sensor_direction`（硬件属性，开机间恒定）。旧三键方案（`zangle`/`dir`/`valid`）已废弃，开机时自动把旧 `dir` 迁移进 `cal` blob。
+
+启动行为：
+
+1. `mcal/cal` 存在且有效：预置 `sensor_direction` 后执行 `initFOC()`，跳过方向探测（约 2 秒），零电角由 `alignSensor()` 重新锚定。开机时间约 1.5 秒。
+2. 无有效存档：执行 `initFOC()` 全流程校准。方向探测的极对数校验（`pp_check_result`）失败时不保存，下次开机重试全流程。
+3. 设置页“重新校准”双击确认后调用 `motor_clear_calibration()`，擦除整个 `mcal` namespace，随后重启执行全流程校准。
+
+禁止恢复“预置 NVS 中的 zero_electric_angle 跳过零电角测量”的做法；除非改用带 Z 索引或绝对式接口（I2C），否则零电角必须每次开机重新锚定。
+
+不得用全局 `nvs_flash_erase()` 代替 Motor 校准清理。
+
+---
+
+## 7. Input 架构
+
+### 7.1 数据流
+
+```
+MT6701 ABZ
+   ↓
+motor_task 内部 Encoder
+   ↓ motor snapshot
+input_task
+   ↓
+knob_event_t
+   ↓ FreeRTOS queue
+LVGL task -> page_mgr -> 当前页面 on_rotate(steps)
+```
+
+Input 使用 `motor_get_position()` 和 `motor_get_mode_seq()`，不直接访问编码器。
+
+### 7.2 当前参数
+
+| 项目 | 当前值 |
+|---|---|
+| 轮询周期 | `CONFIG_KNOB_INPUT_POLL_MS=5` |
+| 事件队列长度 | `CONFIG_KNOB_INPUT_QUEUE_LEN=16` |
+| 事件类型 | `KNOB_EVENT_ROTATE` |
+| `steps` | 相对上次采样位置差；正值为顺时针，负值为逆时针 |
+| 时间戳 | `esp_timer_get_time()` 的毫秒值 |
+
+一次采样中跨越多个档位会作为一个含多步的 `steps` 事件发送。
+
+### 7.3 状态同步与防幽灵旋转
+
+Input 使用 seqlock 式三次读取：
+
+```text
+seq1 = motor_get_mode_seq()
+pos  = motor_get_position()
+seq2 = motor_get_mode_seq()
+```
+
+若 `seq1 != seq2` 或 `seq1 != last_seq`：
+
+1. 重新读取位置和序列号。
+2. 清空输入事件队列。
+3. 不向上层发送 delta。
+
+页面切换时 page_mgr 调用 `knob_input_reset()`；Motor 在模式切换或位置强制设置时递增 `snap_seq`。两套机制共同防止：
+
+- 页面切换后旧位置差泄漏到新页面。
+- 进入页面后突然跳格。
+- 动画期间残留输入被新页面消费。
+
+禁止用未经分析的 `steps = 0` / `delta = 0` 补丁掩盖状态同步问题。
+
+---
+
+## 8. UI 架构
+
+### 8.1 page_mgr
+
+页面栈最大深度 8，页面由 `page_ops_t` 描述：
+
+```text
+create
+destroy
+on_rotate
+on_back
+on_tick
+on_resume
+flick_block
+```
+
+导航 API：
+
+```text
+pm_push
+pm_replace
+pm_pop
+pm_top
+pm_busy
+pm_depth
+```
+
+进入页面时 page_mgr 创建根对象并调用 `create`；退出时调用 `destroy`，然后删除根 LVGL 对象。状态栏返回按钮只在页面栈深度大于 1 时显示。
+
+### 8.2 页面生命周期
+
+```
+页面 create
+  ↓
+操作 / 子页面 push
+  ↓
+子页面 pop 动画结束
+  ↓
+恢复栈顶页面
+  ↓
+调用 on_resume
+  ↓
+重新声明页面所需 Motor mode/range
+  ↓
+knob_input_reset()
+```
+
+当前实现 `on_resume` 的页面包括：
+
+```text
+pg_menu
+pg_playground
+pg_hass
+pg_env
+pg_setting
+pg_factory
+```
+
+页面不能只在 `create` 时声明 Motor 状态；从子页面返回后必须通过 `on_resume` 恢复，否则会残留子页面的手感模式。
+
+### 8.3 甩动返回与 flick_block
+
+全局快速逆时针甩动返回参数：
+
+```text
+窗口：350 ms
+累计：逆时针 >= 10 steps
+```
+
+当前只允许以下页面对 `on_back` 触发甩动返回：
+
+```text
+PAGE_ENV
+PAGE_HASS
+PAGE_SETTING
+PAGE_SYSINFO
+PAGE_FACTORY
+PAGE_APCFG
+PAGE_SYSMON
+```
+
+`flick_block` 当前用于：
+
+- `pg_hass` 控制视图：旋转代表 LEFT/RIGHT 输入。
+- `pg_setting` 编辑视图：旋转代表亮度或熄屏时长输入。
+
+其他页面即使有 `on_back`，也不在甩动返回白名单内。触摸确认、点击和状态栏返回按钮仍是主要导航手段。
+
+### 8.4 触摸手势
+
+- 普通页面左右横滑会执行 `on_back`。
+- `pg_pcdial` 横滑映射音量，上下滑映射鼠标滚轮。
+- `pg_tcal` 禁用普通手势，触摸只用于采样校准点。
+- 手势通过 LVGL `LV_EVENT_GESTURE` 产生，并调用 `lv_indev_reset()` 取消当前按压，避免手势再触发 `CLICKED`。
+
+### 8.5 状态栏
+
+状态栏高度 22 px，位于 top layer，包含：
+
+```text
+返回按钮
+页面标题
+WiFi
+Bluetooth
+MQTT
+时间
+```
+
+当前颜色语义：
+
+| 元素 | 当前实现 |
+|---|---|
+| 时间 | 有效时间显示 `HH:MM`，未同步时显示 `--:--` |
+| WiFi | 已连接白色；未连接灰色 |
+| MQTT | 已连接白色；客户端已配置但未连接红色；未配置灰色 |
+| Bluetooth | 已连接蓝色；未连接灰色 |
+
+当前 WiFi 图标没有区分“未配置”和“已配置但连接失败”，两者都显示灰色。只有 MQTT 使用了红/灰区分。
+
+### 8.6 页面列表
+
+| 页面 | 当前功能 |
+|---|---|
+| `pg_startup` | SmartKnob 启动动画；2 秒后根据触摸校准状态进入 `pg_tcal` 或 `pg_menu` |
+| `pg_menu` | 6 项三副本无限循环菜单；触摸滑动和旋钮切换焦点，点击进入 |
+| `pg_pcdial` | BLE HID 电脑控制；音量/滚轮模式切换、播放暂停、上一首/下一首、配对状态 |
+| `pg_playground` | 12 种 Motor 手感试玩；点击切换模式，显示圆盘、位置和越界红弧 |
+| `pg_hass` | 4 类设备循环列表；控制视图中旋转发送 LEFT/RIGHT，点击发送 ON/OFF |
+| `pg_env` | CO2、温湿度、等级卡和 2 小时趋势图；旋转或点击切换 CO2/温度/湿度 |
+| `pg_setting` | 亮度、熄屏时长、系统监控、蓝牙清除配对、Motor 重新校准 |
+| `pg_sysinfo` | 版本、IP、MQTT、运行时长、熄屏配置、构建时间、Web 地址和工厂测试入口 |
+| `pg_sysmon` | CPU、内部 RAM、PSRAM、历史最小空闲和任务表；退出后采样任务挂起 |
+| `pg_apcfg` | SoftAP 配网页；显示热点名、访问 URL 和二维码 |
+| `pg_tcal` | 四点触摸校准；旋钮累计 12 格可跳过 |
+| `pg_factory` | 触摸、LED、Motor、编码器、SCD40、WiFi/MQTT 的现场测试入口 |
+
+`pg_factory` 不是恢复出厂页面；Web 恢复出厂走 HTTP `/factory_reset`。
+
+---
+
+## 9. LVGL Memory Strategy
+
+### 9.1 设计意图
+
+项目目标是使用 libc malloc，并利用 ESP32-S3 的 8 MB PSRAM，避免恢复早已废弃的 64 KB LVGL builtin memory pool。
+
+目标配置为：
+
+```text
+CONFIG_LV_USE_STDLIB_MALLOC=1
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0
+```
+
+`main/Kconfig.projbuild` 额外声明了一个整数符号 `LV_USE_STDLIB_MALLOC`，意图让 LVGL 使用 CLIB malloc。
+
+### 9.2 当前实际生效状态
+
+当前生成的 `build/config/sdkconfig.h` 同时存在：
+
+```text
+CONFIG_LV_USE_STDLIB_MALLOC 1
+CONFIG_LV_USE_BUILTIN_MALLOC 1
+CONFIG_LV_USE_CLIB_MALLOC 未设置
+CONFIG_LV_MEM_SIZE_KILOBYTES 64
+```
+
+LVGL 9.2.0 的 `src/lv_conf_kconfig.h` 优先根据 `CONFIG_LV_USE_BUILTIN_MALLOC` 定义：
+
+```text
+CONFIG_LV_USE_STDLIB_MALLOC LV_STDLIB_BUILTIN
+```
+
+因此当前工程虽然保留了 `CONFIG_LV_USE_STDLIB_MALLOC=1`，但该整数符号会被 Kconfig 映射覆盖，实际生效仍是 builtin 64 KB allocator。这是一个未解决的配置冲突，不能把它记录为已完成修复。
+
+正确修复方向是让 LVGL memory choice 实际选择 `LV_USE_CLIB_MALLOC`，并移除冲突的内置池选择；在修复和重新验证前，不得声称 LVGL 对象已经全部落到 PSRAM。
+
+### 9.3 禁止回退
+
+- 不恢复 LVGL builtin 64 KB pool 作为正式内存策略。
+- 不删除 heap poisoning 来掩盖 heap corruption。
+- 不因为 `CONFIG_LV_MEM_SIZE_KILOBYTES=64` 存在于文件里，就把 builtin pool 当成当前正确方案。
+- 不把 `CONFIG_LV_USE_STDLIB_MALLOC=1` 单独视为 CLIB 已生效的充分条件。
+
+当前 `CONFIG_HEAP_POISONING_COMPREHENSIVE=y` 是长期启用的内存踩踏检测措施，不是临时调试开关。出现 heap corruption 时必须分析生命周期、重复释放、越界写、callback、PSRAM 和 LVGL 异步对象，不得直接关闭 poisoning。
+
+---
+
+## 10. LVGL 对象生命周期
+
+`display` 组件自行创建 LVGL task，当前参数：
+
+| 项目 | 当前值 |
+|---|---|
+| Core | 0 |
+| 优先级 | 8 |
+| 栈 | 6144 字节 |
+| 最小调度延迟 | 5 ms |
+| 最大调度延迟 | 500 ms |
+| Tick | 2 ms |
+| 渲染模式 | partial render，双 DMA buffer |
+
+### 10.1 ui_label_roll
+
+`ui_label_roll()` 采用幽灵标签复用：
+
+1. 第一次变化时创建宿主标签的子标签，并记录在宿主 user data。
+2. 文本变化时，幽灵标签复用旧文本并淡出。
+3. 幽灵标签在动画结束后继续隐藏复用，不删除。
+4. 主标签设置新文本，新旧文本在固定宽度容器内重合。
+
+禁止把 `ui_label_roll` 改回 create -> animate -> delete 的循环。历史实测表明，在动画 ready 回调中删除仍有动画关联的 LVGL 对象可能导致动画链表破坏和堆损坏。
+
+### 10.2 当前页面删除风险
+
+`page_mgr` 的 `pm_pop_anim_done()` 目前仍在 LVGL animation ready 回调中调用 `pm_delete_page()`，进而删除页面根对象。这与硬约束“不要在动画回调中删除 LVGL 对象”存在直接冲突。
+
+该行为不等同于 `ui_label_roll` 的幽灵标签删除问题，但应视为高风险区域。本次文档同步不修改代码；后续修复前必须单独分析 LVGL 动画链表、页面栈和回调时机。
+
+---
+
+## 11. 字体系统
+
+当前字库：
+
+```text
+lv_font_msyh_16
+字体源：Microsoft YaHei 16 px
+格式：LVGL FMT_TXT / PLAIN 4bpp / SPARSE_TINY
+当前字形数：280
+line_height：22
+base_line：5
+```
+
+生成流程：
+
+```
+UI / Motor 源码文案
+  ↓
+tools/gen_msyh_font.py 自动收集字符
+  ↓
+Pillow + msyh.ttc 生成 4bpp 位图
+  ↓
+components/ui/fonts/lv_font_msyh_16.c
+  ↓
+tools/check_glyphs.py 校验
+```
+
+`gen_msyh_font.py` 当前扫描：
+
+```text
+components/ui/pages/*.c
+components/ui/smartknob_ui.c
+components/motor/motor.cpp
+```
+
+`check_glyphs.py` 当前只扫描：
+
+```text
+components/ui/pages/*.c
+components/ui/smartknob_ui.c
+```
+
+因此生成器包含 Motor 模式文案，但覆盖率检查没有覆盖 `motor.cpp`。这是当前工具链缺口，不应误认为校验脚本覆盖了全部动态文案。
+
+修改中文或特殊字符后必须：
+
+1. 修改源码文案。
+2. 运行 `python tools/gen_msyh_font.py`。
+3. 运行 `python tools/check_glyphs.py`。
+4. 重新编译并检查缺字。
+
+当前校验结果：源码已使用 CJK 字符 166 个，当前字库覆盖 280 字形，检查通过。
+
+---
+
+## 12. 环境传感器与历史数据
+
+### 12.1 SCD40
+
+SCD40 初始化参数：
+
+```text
+I2C0
+SDA=GPIO5
+SCL=GPIO6
+100 kHz
+设备地址 0x62
+```
+
+`main.c` 创建 `scd40_task`：
+
+```text
+Core 0
+优先级 3
+栈 4096
+轮询周期 CONFIG_SCD40_POLL_INTERVAL_MS=2000
+```
+
+任务流程：
+
+```
+data_ready
+  ↓
+read measurement
+  ↓
+app_state_set_env
+  ↓
+mqtt_ha_publish
+  ↓
+env_hist_push_if_due
+```
+
+SCD40 测量周期通常为约 5 秒；软件轮询为 2 秒，只有 `data_ready` 为真时读取。
+
+### 12.2 app_state
+
+`app_state` 是环境数据和 WiFi/AP 状态的跨任务只读快照：
+
+- SCD40 任务写入 `co2_ppm`、`temperature_c`、`humidity_pct`、`has_data`。
+- UI、MQTT、Web 和工厂测试读取环境快照。
+- WiFi 状态和 SoftAP SSID/IP 也由该组件保存，AP 字符串字段由临界区保护。
+
+### 12.3 env_hist
+
+历史缓冲首次使用时优先从 PSRAM 分配；PSRAM 不可用时回退普通 calloc。
+
+| 缓冲 | 当前容量 | 当前采样间隔 | 用途 |
+|---|---|---|---|
+| 高分辨率 | 120 点 | 60 秒 | 设备 `pg_env` 2 小时趋势图 |
+| 日级缓冲 | 1440 点 | 60 秒 | Web `/api/envhist` 24 小时趋势图 |
+
+实现特性：
+
+- 两个环形缓冲区同时记录 CO2、温度 x10、湿度 x10。
+- 不持久化到 Flash，重启清零。
+- `seq` 累加值用于 UI 判断是否有新样本。
+- 日级缓冲第一次满 60 秒时，会先用现有 2 小时缓冲回填，避免 Web 曲线长期为空。
+
+当前已知冲突：`env_hist.h` 和 `env_hist.c` 实际按 60 秒写入日级缓冲，但 Web `/api/envhist` 返回 `"iv_s":300`，前台图画布也按 5 分钟计算时间轴。因此浏览器时间轴和实际采样间隔不一致。本次只记录问题，不修改代码。
+
+当前历史数据没有保存每个样本的绝对时间戳，只保存采样序号和时间间隔；Web 图表用当前时间和固定 interval 反推横轴。
+
+---
+
+## 13. WiFi
+
+### 13.1 STA
+
+- 配置优先级：NVS `webcfg/wifi_ssid`、`webcfg/wifi_pass`，缺失时使用 Kconfig 默认值。
+- `WIFI_EVENT_STA_DISCONNECTED` 后无限重连。
+- 当次开机已经连接过 WiFi 后再断线，只维持后台重连，不开启 SoftAP。
+- 连接成功强制 `WIFI_PS_NONE`，避免入站 TCP 被省电策略丢包。
+- WiFi task 配置在 core0。
+
+### 13.2 SoftAP 配网回退
+
+当前配置：
+
+```text
+WIFI_AP_FALLBACK_ENABLE=y
+WIFI_AP_FALLBACK_TIMEOUT_SEC=90
+WIFI_AP_PASSWORD 默认空
+```
+
+流程：
+
+```
+STA 启动
+  ↓
+等待 90 秒
+  ├─ 已连接 -> 正常运行
+  └─ 未连接且本次开机从未连过
+       ↓
+     APSTA + SmartKnob-XXXX
+       ↓
+     Web 管理页
+       ↓
+     保存新 WiFi 配置
+       ↓
+     STA 连上后关闭 SoftAP
+```
+
+SoftAP 默认访问地址是 `192.168.4.1`。`pg_apcfg` 可以手动关闭提示页，但热点会保留到 STA 配网成功。
+
+AP 启动前会检查 internal largest free block；小于 24 KB 时拒绝启动热点，避免闭源 WiFi 库内存分配失败崩溃。
+
+---
+
+## 14. BLE HID
+
+### 14.1 实现
+
+使用 NimBLE，设备名：
+
+```text
+SmartKnob
+```
+
+当前服务：
+
+```text
+HID Service 0x1812
+Battery Service 0x180F
+Device Information Service 0x180A
+PnP ID 0x2A50
+```
+
+HID Report Map 包含：
+
+```text
+Report ID 1：Consumer Control
+Report ID 2：Mouse，3 按键 + dx/dy + wheel
+```
+
+当前功能 API：
+
+```text
+blehid_consumer_send
+blehid_mouse_scroll
+blehid_mouse_move
+blehid_disconnect
+blehid_unpair_all
+```
+
+当前 UI 暴露音量加减、静音、播放/暂停、上一首/下一首、滚轮。相对鼠标移动 API 存在，但当前页面和 Web API 没有把它作为常规按钮暴露。
+
+### 14.2 配对与协议
+
+- 使用 Just Works、bonding、Secure Connections，不要求 MITM。
+- 绑定数据由 NimBLE 的 NVS 持久化能力保存。
+- 断线后重新广播。
+- Protocol Mode 支持 Boot/Report；Consumer 在 Boot 模式静默，Mouse Boot 报告使用 3 字节。
+- Windows 所需的 PnP ID 已实现，广播 appearance 使用 Generic HID 0x03C2。
+- 连接后请求 30..45 ms connection interval 和 latency 2，降低与 WiFi 共存时的空口争用。
+
+清除配对使用 `blehid_unpair_all()`，只清除 BLE 绑定，不影响 Motor 校准、触摸校准、WiFi 或 MQTT 配置。
+
+代码写明 Windows/macOS/Linux 免驱目标的实现方式，但仓库没有当前硬件上的完整配对与输入回归报告，仍应列入硬件待验证。
+
+---
+
+## 15. MQTT / Home Assistant
+
+### 15.1 当前启用状态
+
+当前 `sdkconfig` 中：
+
+```text
+CONFIG_MQTT_HA_ENABLE=y
+```
+
+代码支持关闭 MQTT；关闭时相关 API 为空实现。
+
+### 15.2 传感器发现
+
+设备在 MQTT 连接后发布 3 个 HA sensor discovery：
+
+```text
+<client_id>_co2
+<client_id>_temp
+<client_id>_humidity
+```
+
+状态 topic：
+
+```text
+homeassistant/sensor/<client_id>/state
+```
+
+状态载荷：
+
+```json
+{"co2": 800, "temp": 24.5, "rh": 48.0}
+```
+
+### 15.3 设备动作触发器
+
+设备发布 16 个 `device_automation` discovery，组合为：
+
+```text
+4 类设备：light / ac / fan / washer
+4 个动作：on / off / left / right
+```
+
+动作 topic：
+
+```text
+smartknob/action
+```
+
+载荷示例：
+
+```text
+light_on
+fan_right
+```
+
+触发器发现配置每 400 ms 发布一条，发送完成后停止定时器。重新连接时会重新发布。
+
+### 15.4 下行命令
+
+设备订阅：
+
+```text
+smartknob/cmnd/#
+```
+
+当前支持：
+
+| Topic | 载荷 | 行为 |
+|---|---|---|
+| `smartknob/cmnd/shake` | 可忽略 | `motor_shake(3, 40)` |
+| `smartknob/cmnd/mode` | 整数模式编号 | 投递 `motor_set_mode`；非法编号由 Motor API 拦截 |
+| `smartknob/cmnd/led` | 6 位 RRGGBB | 设置 WS2812 |
+
+### 15.5 页面控制通道
+
+`pg_hass` 控制视图同时发布：
+
+```text
+<mqtt_topic>/HOME/<设备中文名>  payload=LEFT/RIGHT/ON/OFF
+smartknob/action                 payload=<device>_<action>
+```
+
+`mqtt_topic` 默认是 `knob`，可通过 NVS `webcfg/mqtt_topic` 覆盖；当前 Web 保存表单没有提供该字段。
+
+### 15.6 幂等和线程安全
+
+- `mqtt_ha_init()` 以 `s_client` 判定是否已初始化，重复调用不会重复创建 client。
+- `mqtt_ha_reinit()` 在 mutex 下停止并销毁旧 client，再用 NVS 配置创建新 client。
+- publish 路径也用同一 mutex 避免 client 生命周期和发送并发。
+- MQTT task stack 设置为 4096，reconnect timeout 30 秒，network timeout 30 秒。
+
+---
+
+## 16. WebCfg
+
+HTTP server 绑定 `0.0.0.0`，监听端口 80，STA 和 SoftAP 模式都可访问。HTTP task 栈 8192，发送和接收等待时间均放宽到 20 秒。
+
+当前实际 URL：
+
+| URL | 方法 | 功能 |
+|---|---|---|
+| `/` | GET | 管理台 HTML |
+| `/status` | GET | 状态 JSON |
+| `/api/envhist` | GET | 24 小时历史，chunked JSON |
+| `/save` | POST | 保存 WiFi/MQTT 并重连 |
+| `/api/set` | POST | 电机、显示、LED、BLE HID 控制 |
+| `/ota` | POST | 上传固件到下一个 OTA 分区 |
+| `/restart` | POST | 重启 |
+| `/factory_reset` | POST | 清除 `webcfg` namespace 并重启 |
+
+旧基线中提到的 `/api/config` 和 `/api/factory` 当前不存在。
+
+### 16.1 `/api/set`
+
+当前 action：
+
+```text
+motor_mode
+shake
+estop
+brightness
+timeout
+led
+ble_disc
+hid
+```
+
+`hid` 的 value：
+
+```text
+vol_up
+vol_dn
+mute
+play
+next
+prev
+scr_up
+scr_dn
+```
+
+### 16.2 环境历史
+
+`/api/envhist` 使用 `httpd_resp_send_chunk()` 分段发送：
+
+```text
+iv_s
+n
+co2[]
+temp[]   x10
+rh[]     x10
+```
+
+当前 `iv_s` 返回 300，但实际日级缓冲采样间隔是 60 秒，见第 12.3 节。
+
+### 16.3 OTA
+
+- 目标为 `esp_ota_get_next_update_partition(NULL)`。
+- 最大接收大小 0x300000，即 3 MB。
+- 写入完成后调用 `esp_ota_set_boot_partition()`。
+- 成功后约 1 秒重启。
+- 分区表包含 `otadata` 和 3 个 3 MB 应用分区。
+
+### 16.4 恢复出厂
+
+当前 Web 恢复出厂行为是：
+
+```text
+webcfg_erase_all()
+esp_restart()
+```
+
+它删除整个 NVS namespace `webcfg`，包括 WiFi、MQTT、亮度、熄屏和可能存在的 `mqtt_topic` 配置。
+
+它不会删除：
+
+```text
+mcal        Motor 校准
+touchcal    触摸校准
+BLE bonds   NimBLE 配对
+```
+
+不得把当前 Web 恢复出厂描述成 `nvs_flash_erase()`。
+
+---
+
+## 17. NVS 设计
+
+| Namespace | Key | 类型 | 用途 | Web 恢复出厂删除 |
+|---|---|---|---|---|
+| `mcal` | `cal` | blob {magic, ver, dir} | FOC 接线方向存档 | 否 |
+| `touchcal` | `m6` | blob/6 floats | 四点触摸仿射矩阵 | 否 |
+| `webcfg` | `wifi_ssid` | str | STA SSID | 是 |
+| `webcfg` | `wifi_pass` | str | STA 密码 | 是 |
+| `webcfg` | `mqtt_uri` | str | Broker URI | 是 |
+| `webcfg` | `mqtt_user` | str | MQTT 用户名 | 是 |
+| `webcfg` | `mqtt_pass` | str | MQTT 密码 | 是 |
+| `webcfg` | `mqtt_topic` | str | HA 控制 topic 前缀；代码读取，Web 保存表单当前不写 | 是 |
+| `webcfg` | `brightness` | i32 | 屏幕亮度 10..100 | 是 |
+| `webcfg` | `timeout` | i32 | 熄屏分钟 0..30，0=常亮 | 是 |
+| NimBLE 管理 | 由协议栈管理 | - | BLE pairing/bond | 否，使用 `blehid_unpair_all()` |
+
+NVS 全盘擦除只有启动时 `ESP_ERR_NVS_NO_FREE_PAGES` / `ESP_ERR_NVS_NEW_VERSION_FOUND` 恢复路径，以及首次烧录建议的 `erase-flash`。业务功能不得随意调用 `nvs_flash_erase()`。
+
+---
+
+## 18. 任务、Core 与实时性
+
+| 任务/执行体 | Core | 优先级 | 栈 | 说明 |
+|---|---:|---:|---:|---|
+| `app_main` | 0 | 系统默认 | 3584 | 初始化和启动编排 |
+| `motor` | 1 | 2 | 4096 | 唯一访问 BLDCMotor/FOC |
+| `LVGL` | 0 | 8 | 6144 | LVGL timer、渲染、页面、Input 消费 |
+| `knob_input` | 0 | 1 | 2048 | 5 ms 轮询 Motor 快照 |
+| `scd40` | 0 | 3 | 4096 | SCD40 数据读取 |
+| `sysmon` | 0 | 1 | 4096 | 页面开启时 1 Hz 采样；平时挂起 |
+| NimBLE host | 0 | 协议栈默认 | 4096 | `CONFIG_BT_NIMBLE_PINNED_TO_CORE=0` |
+| WiFi task | 0 | 协议栈默认 | 协议栈配置 | `CONFIG_ESP_WIFI_TASK_PINNED_TO_CORE_0=y` |
+| MQTT task | 未显式绑定 | 协议栈默认 | 4096 | 项目代码未设置 core affinity |
+| HTTPD task | 未显式绑定 | 协议栈默认 | 8192 | 项目代码未设置 core affinity |
+
+实时性规则：
+
+- Motor loop 不被 UI、网络、传感器或日志长阻塞。
+- LVGL 任务不执行同步网络请求、大块文件 IO 或长 `delay`。
+- MQTT callback、BLE callback 和实时任务不进行大 JSON 拼接或长时间等待。
+- Sysmon 默认挂起，只有进入 `pg_sysmon` 才启用。
+- LED RMT 发送使用 mutex 串行化，避免 WiFi、MQTT、UI、HTTP 并发调用。
+
+当前已知阻塞点：`pg_setting` 的 Motor 重新校准双击确认路径在 LVGL 回调中执行 `vTaskDelay(600 ms)` 后重启。该等待违反“UI 回调不做长阻塞”的约束，但本次文档同步不修改代码。
+
+---
+
+## 19. 系统监控
+
+`sysmon` 使用静态缓冲，任务创建后等待 notification；页面进入调用 `sysmon_set_enabled(true)`，退出调用 `false` 使任务挂起。
+
+当前页面显示：
+
+```text
+CPU0
+CPU1
+CPU 平均
+内部 RAM
+PSRAM
+历史最小空闲内存
+任务表
+```
+
+任务表当前显示：
+
+```text
+任务名
+CPU
+栈剩余
+Core + 状态
+```
+
+可见窗口为 16 行，旋钮虚拟滚动，不是 16 个独立任务对象和 64 个小标签。
+
+当前实现没有采集或显示芯片温度，也没有独立的“最大连续内存块”字段；`min_free` 是系统历史最小空闲内存。旧文档若写有这两项，应视为尚未实现。
+
+---
+
+## 20. 分区与工具链
+
+当前分区：
+
+```text
+nvs      0x6000
+otadata  0x2000
+phy_init 0x1000
+factory  0x300000
+ota_0    0x300000
+ota_1    0x300000
+```
+
+工具：
+
+| 工具 | 用途 |
+|---|---|
+| `tools/build.ps1` | 固定 ESP-IDF v5.5.5 环境并执行 `idf.py` |
+| `tools/gen_msyh_font.py` | 扫描 UI/Motor 文案并生成 4bpp 中文字库 |
+| `tools/check_glyphs.py` | 校验 UI 页面和主 UI 文件的中文字符覆盖 |
+
+构建命令：
+
+```powershell
+powershell -File tools\build.ps1 build
+```
+
+不得擅自替换项目默认构建流程。
+
+`sdkconfig` 和 `sdkconfig.defaults` 必须保持 UTF-8。不要在 PowerShell 中用 `Set-Content` 批量改写 `sdkconfig`，以免破坏编码和配置语义。
+
+---
+
+## 21. 已知限制与硬件待验证
+
+当前仓库可从代码和静态分析确认，但不能自动等同于硬件验证：
+
+| 项目 | 当前状态 |
+|---|---|
+| 首次烧录和分区 | 分区表已含 otadata，首次变更建议完整擦除；待实机确认 |
+| 触摸 IC/接线 | 代码有 selftest、原始值诊断和无触摸模块提示；待实机确认 |
+| 触摸方向 | 有四点校准和 Kconfig mirror/swap；待实机确认 |
+| BLE 配对 | 代码实现 NimBLE HID、绑定持久化、重连；待实机确认 |
+| S-Dial 音量/滚轮/媒体 | 页面和 HID 报文已实现；待实机确认 |
+| 菜单动画 | 代码实现三副本循环和宽度动画；待实机确认 |
+| Motor 闭环/力反馈 | FOC、12 模式和校准持久化已实现；待实机确认 |
+| WiFi/AP 回退 | 代码实现 90 秒回退和管理页；待实机确认 |
+| MQTT/HA Discovery | 3 个 sensor + 16 个 device_automation 已实现；待实机确认 |
+| Web/OTA | HTTP API、chunked history 和 OTA 分区已实现；待实机确认 |
+| LED | 代码实现状态灯和互斥保护；待实机确认 |
+| 长时间稳定性 | 无当前版本连续运行报告；待实机确认 |
+
+---
+
+## 22. 防回退设计决策
+
+1. UI、MQTT、BLE、Web、Input 不得直接操作 BLDCMotor。
+2. Shake 必须保持非阻塞状态机。
+3. `motor_disable` 必须持续抑制 haptic，直到下一次模式切换重新使能。
+4. 页面切换必须同时重置 Input 队列基准和 Motor mode sequence 同步。
+5. `page pop` 后必须调用栈顶页面的 `on_resume`。
+6. `lv_scale` 不应吞掉页面级点击，需要按其实际交互显式移除 `CLICKABLE`。
+7. 浮层应独立于 flex scroll content，避免布局流把浮层放到错误位置。
+8. LVGL 动画回调不应删除仍有关联动画的对象；`ui_label_roll` 必须复用幽灵标签。
+9. LVGL 不恢复 builtin 64 KB allocator 作为正式方案。
+10. 字库与源码文案必须同步生成和校验。
+11. 触摸总线异常不能产生持续幽灵点击。
+12. 不关闭 comprehensive heap poisoning 来掩盖内存破坏。
+13. 不把 `CONFIG_LV_USE_STDLIB_MALLOC=1` 单独当作 CLIB 已生效的证明；必须检查最终 Kconfig 映射和构建配置。
+14. 不把没有绝对时间戳的 env_hist 描述成已完成真实时间戳历史。
+15. 不把 Web 恢复出厂描述成全 NVS 擦除。
+16. 不把代码级实现描述成当前硬件已完整验证。
+
+---
+
+## 23. 当前文档与代码冲突摘要
+
+1. 实际 CPU 配置是 160 MHz，旧基线写 240 MHz。
+2. 实际有 12 种 Motor 模式，旧架构文档和 `pg_menu` 文案仍写 11。
+3. 字库当前是 280 字形，旧 Bug 文档中的 215 是历史值。
+4. `CONFIG_LV_USE_STDLIB_MALLOC=1` 当前没有让 CLIB 生效，实际被 builtin choice 覆盖。
+5. Web `/api/envhist` 当前标记 300 秒间隔，但 env_hist 实际按 60 秒采样。
+6. page_mgr 当前在 pop 动画 ready 回调里删除页面对象，和硬约束存在冲突。
+7. `pg_setting` 重新校准路径在 LVGL 回调中阻塞 600 ms。
+8. `pg_menu` 仍显示“11 种手感模式”，实际模式数是 12。
+9. `README.md` 仍包含旧 PSRAM、SPI 时钟、模式数量和依赖描述；本次任务只同步两份 docs 文档。
