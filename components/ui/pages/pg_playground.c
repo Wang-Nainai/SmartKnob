@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include "page_mgr.h"
 #include "motor.h"
 
@@ -8,18 +9,23 @@ LV_FONT_DECLARE(lv_font_msyh_16);
 
 typedef struct {
     int mode;
-    lv_obj_t *scale;
-    lv_obj_t *needle;
-    lv_obj_t *arc;
+    lv_obj_t *track;      /* 全周暗色圆环 */
+    lv_obj_t *range_arc;  /* 量程窗口弧(有界模式显示, 无界隐藏) */
+    lv_obj_t *red_arc;    /* 越界红弧 */
+    lv_obj_t *bezel;      /* 外围细刻度圈 */
+    lv_obj_t *dot;        /* 主题蓝指示圆点 */
     lv_obj_t *label_value;
     lv_obj_t *label_mode;
     lv_timer_t *timer;
+    int win_min;          /* 当前模式量程(档位) */
+    int win_max;
+    int win_deg0;         /* 量程窗口起始角(度, 0=12点顺时针) */
+    int win_span;         /* 量程窗口角跨度 */
 } pg_data_t;
 
-/* X-Knob geometry: bound arc from 200 to 340 degrees, starts at 120 */
-#define ARC_START_ROTATION 120
-#define SCALE_LEFT_BOUND_DEG 200
-#define SCALE_ANGLE_RANGE 140
+/* 有界模式量程窗口: 从 200° 起顺时针 140° (X-Knob geometry) */
+#define WIN_DEG0_BOUND 200
+#define WIN_SPAN_BOUND 140
 
 static void pg_apply_mode(pg_data_t *d)
 {
@@ -32,22 +38,22 @@ static void pg_apply_mode(pg_data_t *d)
 
     switch (m) {
     case MOTOR_MODE_ON_OFF: {
-        lv_scale_set_total_tick_count(d->scale, 3);
-        lv_scale_set_major_tick_every(d->scale, 1);
-        lv_scale_set_range(d->scale, 0, 1);
-        lv_scale_set_angle_range(d->scale, 60);
-        lv_scale_set_rotation(d->scale, 240);
+        d->win_min = 0;
+        d->win_max = 1;
+        d->win_deg0 = 240;
+        d->win_span = 60;
+        lv_arc_set_bg_angles(d->range_arc, 240, 300);
         break;
     }
     case MOTOR_MODE_UNBOUND_NO_DETENTS:
     case MOTOR_MODE_MULTI_TURN_NO_DETENTS:
     case MOTOR_MODE_UNBOUNDED_DETENTS:
     case MOTOR_MODE_AUTO_RETURN_CENTER: {
-        lv_scale_set_total_tick_count(d->scale, 73);
-        lv_scale_set_major_tick_every(d->scale, 1);
-        lv_scale_set_range(d->scale, 0, 72);
-        lv_scale_set_angle_range(d->scale, 360);
-        lv_scale_set_rotation(d->scale, 270);
+        d->win_min = 0;
+        d->win_max = 0;
+        d->win_deg0 = 0;
+        d->win_span = 360;
+        lv_arc_set_bg_angles(d->range_arc, 0, 0);   /* 无界: 隐藏窗口弧 */
         break;
     }
     default: {
@@ -56,11 +62,12 @@ static void pg_apply_mode(pg_data_t *d)
         if (m == MOTOR_MODE_BOUND_NO_DETENTS) max = 10;
         if (m == MOTOR_MODE_FINE_NO_DETENTS || m == MOTOR_MODE_FINE_DETENTS) max = 255;
         if (m == MOTOR_MODE_RETURN_CENTER_WITH_DETENTS) { min = -6; max = 6; }
-        lv_scale_set_total_tick_count(d->scale, 13);
-        lv_scale_set_major_tick_every(d->scale, 1);
-        lv_scale_set_range(d->scale, min, max);
-        lv_scale_set_angle_range(d->scale, SCALE_ANGLE_RANGE);
-        lv_scale_set_rotation(d->scale, SCALE_LEFT_BOUND_DEG);
+        d->win_min = min;
+        d->win_max = max;
+        d->win_deg0 = WIN_DEG0_BOUND;
+        d->win_span = WIN_SPAN_BOUND;
+        lv_arc_set_bg_angles(d->range_arc, WIN_DEG0_BOUND,
+                             WIN_DEG0_BOUND + WIN_SPAN_BOUND);
         break;
     }
     }
@@ -68,48 +75,54 @@ static void pg_apply_mode(pg_data_t *d)
     motor_set_mode(m, 0, 0);
 }
 
+/* 指示圆点绕环: 骑在轨道中线 (r=96), 0 = 12点方向 */
+static void pg_dot_set(pg_data_t *d, int deg)
+{
+    deg = ((deg % 360) + 360) % 360;
+    float rad = (float)deg * 0.01745329f;
+    lv_obj_set_pos(d->dot, 120 + (int32_t)(96.0f * sinf(rad)) - 6,
+                          168 - (int32_t)(96.0f * cosf(rad)) - 6);
+}
+
 static void pg_playground_timer(lv_timer_t *t)
 {
     pg_data_t *d = lv_timer_get_user_data(t);
     int32_t pos = motor_get_position();
     float off = motor_get_angle_offset_deg();
-    int m = motor_get_mode();
 
-    int32_t needle_val;
-    switch (m) {
-    case MOTOR_MODE_ON_OFF:
-        needle_val = pos;
-        break;
-    case MOTOR_MODE_UNBOUND_NO_DETENTS:
-    case MOTOR_MODE_MULTI_TURN_NO_DETENTS:
-    case MOTOR_MODE_UNBOUNDED_DETENTS:
-    case MOTOR_MODE_AUTO_RETURN_CENTER:
-        needle_val = pos % 72;
-        if (needle_val < 0) needle_val += 72;
-        break;
-    default:
-        needle_val = pos;
-        break;
+    /* 指示圆点角度: 有界模式按量程线性映射进窗口, 开/关固定 60° 窗,
+     * 无界模式每档 5° 绕全周 */
+    int32_t deg;
+    if (d->win_span == 360) {
+        deg = (int32_t)(pos % 72) * 5;
+    } else if (d->win_max > d->win_min) {
+        float t = (float)(pos - d->win_min) / (float)(d->win_max - d->win_min);
+        if (t < 0) t = 0;
+        if (t > 1) t = 1;
+        deg = d->win_deg0 + (int32_t)(t * d->win_span);
+    } else {
+        deg = d->win_deg0;
+        if (pos > 0) deg = d->win_deg0 + d->win_span;
     }
-    lv_scale_set_line_needle_value(d->scale, d->needle, 95, needle_val);
+    pg_dot_set(d, deg);
 
     char buf[24];
     snprintf(buf, sizeof(buf), "%ld", (long)pos);
     lv_label_set_text(d->label_value, buf);
 
-    /* out-of-bounds red arc (X-Knob BoundZeroView) */
+    /* out-of-bounds red arc: 从量程窗口边缘溢出 */
     if (off != 0) {
         int32_t start, end;
         if (pos <= 0) {
-            start = SCALE_LEFT_BOUND_DEG - ARC_START_ROTATION - (int32_t)off;
-            end = SCALE_LEFT_BOUND_DEG - ARC_START_ROTATION;
+            start = d->win_deg0 - (int32_t)off;
+            end = d->win_deg0;
         } else {
-            start = SCALE_LEFT_BOUND_DEG + SCALE_ANGLE_RANGE - ARC_START_ROTATION;
-            end = SCALE_LEFT_BOUND_DEG + SCALE_ANGLE_RANGE - ARC_START_ROTATION - (int32_t)off;
+            start = d->win_deg0 + d->win_span;
+            end = d->win_deg0 + d->win_span + (int32_t)off;
         }
-        lv_arc_set_angles(d->arc, start, end);
+        lv_arc_set_angles(d->red_arc, start, end);
     } else {
-        lv_arc_set_angles(d->arc, 0, 0);
+        lv_arc_set_angles(d->red_arc, 0, 0);
     }
 }
 
@@ -140,60 +153,99 @@ static void pg_playground_create(page_t *p)
     d->label_mode = lv_label_create(p->root);
     lv_obj_set_style_text_color(d->label_mode, lv_color_hex(XK_COLOR_GRAY), 0);
     lv_obj_set_style_text_font(d->label_mode, &lv_font_msyh_16, 0);
-    lv_obj_align(d->label_mode, LV_ALIGN_TOP_MID, 0, 28);
+    lv_obj_align(d->label_mode, LV_ALIGN_TOP_MID, 0, 34);
 
-    /* X-Knob style round scale */
-    d->scale = lv_scale_create(p->root);
-    lv_obj_set_pos(d->scale, 0, 50);
-    lv_obj_set_size(d->scale, 240, 240);
-    lv_obj_set_style_bg_color(d->scale, lv_color_hex(XK_COLOR_PANEL), 0);
-    lv_obj_set_style_radius(d->scale, LV_RADIUS_CIRCLE, 0);
-    lv_scale_set_mode(d->scale, LV_SCALE_MODE_ROUND_INNER);
-    lv_scale_set_label_show(d->scale, false);
+    /* ---- 表盘 (与智能家居页同款 Apple 风格) ----
+     * 外圈刻度圈 -> 全周暗环 -> 内层渐变圆 -> 主题蓝指示点 -> 中央大数值 */
 
-    /* 次刻度: 暗灰细线(背景感) */
-    lv_obj_set_style_length(d->scale, 5, LV_PART_ITEMS);
-    lv_obj_set_style_line_width(d->scale, 1, LV_PART_ITEMS);
-    lv_obj_set_style_line_color(d->scale, lv_color_hex(0x4A4A4A), LV_PART_ITEMS);
-    /* 主刻度: 红色加长(X-Knob 识别符号) */
-    lv_obj_set_style_length(d->scale, 12, LV_PART_INDICATOR);
-    lv_obj_set_style_line_width(d->scale, 2, LV_PART_INDICATOR);
-    lv_obj_set_style_line_color(d->scale, lv_color_hex(XK_COLOR_ACCENT), LV_PART_INDICATOR);
-    /* 外环: 极细暗灰 */
-    lv_obj_set_style_arc_color(d->scale, lv_color_hex(0x3A3A3A), LV_PART_MAIN);
-    lv_obj_set_style_arc_width(d->scale, 1, LV_PART_MAIN);
+    /* 外围刻度圈 (装饰, 固定 73 根) */
+    d->bezel = lv_scale_create(p->root);
+    lv_obj_set_size(d->bezel, 232, 232);
+    lv_obj_set_pos(d->bezel, 4, 52);
+    lv_scale_set_mode(d->bezel, LV_SCALE_MODE_ROUND_INNER);
+    lv_scale_set_label_show(d->bezel, false);
+    lv_scale_set_total_tick_count(d->bezel, 73);
+    lv_scale_set_major_tick_every(d->bezel, 6);
+    lv_scale_set_range(d->bezel, 0, 72);
+    lv_scale_set_angle_range(d->bezel, 360);
+    lv_scale_set_rotation(d->bezel, 0);
+    lv_obj_set_style_length(d->bezel, 5, LV_PART_ITEMS);
+    lv_obj_set_style_line_width(d->bezel, 1, LV_PART_ITEMS);
+    lv_obj_set_style_line_color(d->bezel, lv_color_hex(0x2E2E2E), LV_PART_ITEMS);
+    lv_obj_set_style_length(d->bezel, 10, LV_PART_INDICATOR);
+    lv_obj_set_style_line_width(d->bezel, 2, LV_PART_INDICATOR);
+    lv_obj_set_style_line_color(d->bezel, lv_color_hex(0x5A5A5A), LV_PART_INDICATOR);
+    lv_obj_remove_flag(d->bezel, LV_OBJ_FLAG_CLICKABLE);
 
-    lv_scale_set_total_tick_count(d->scale, 41);
-    lv_scale_set_major_tick_every(d->scale, 1);
-    lv_scale_set_range(d->scale, 0, 360);
-    lv_scale_set_angle_range(d->scale, 360);
-    lv_scale_set_rotation(d->scale, 270);
+    /* 全周暗色圆环 */
+    d->track = lv_arc_create(p->root);
+    lv_obj_set_size(d->track, 204, 204);
+    lv_obj_set_pos(d->track, 18, 66);
+    lv_arc_set_rotation(d->track, 0);
+    lv_arc_set_bg_angles(d->track, 0, 360);
+    lv_arc_set_range(d->track, 0, 100);
+    lv_arc_set_value(d->track, 0);
+    lv_obj_remove_style(d->track, NULL, LV_PART_KNOB);
+    lv_obj_set_style_arc_width(d->track, 0, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(d->track, 12, LV_PART_MAIN);
+    lv_obj_set_style_arc_rounded(d->track, true, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(d->track, lv_color_hex(0x1C1C1E), LV_PART_MAIN);
+    lv_obj_remove_flag(d->track, LV_OBJ_FLAG_CLICKABLE);
 
-    /* needle (blue line) */
-    static lv_point_precise_t needle_points[2] = { {0, 0}, {0, 0} };
-    d->needle = lv_line_create(d->scale);
-    lv_line_set_points_mutable(d->needle, needle_points, 2);
-    lv_obj_set_style_line_width(d->needle, 5, 0);
-    lv_obj_set_style_line_rounded(d->needle, true, 0);
-    lv_obj_set_style_line_color(d->needle, lv_color_hex(XK_COLOR_BLUE), 0);
-    lv_scale_set_post_draw(d->scale, true);
-    lv_scale_set_line_needle_value(d->scale, d->needle, 95, 0);
-    /* 关键: scale 默认可点击且点击不冒泡, 会吞掉整页"点击切换模式" */
-    lv_obj_remove_flag(d->scale, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_remove_flag(p->root, LV_OBJ_FLAG_SCROLLABLE);
+    /* 量程窗口弧 (有界模式: 稍亮的弧段显示合法范围) */
+    d->range_arc = lv_arc_create(p->root);
+    lv_obj_set_size(d->range_arc, 204, 204);
+    lv_obj_set_pos(d->range_arc, 18, 66);
+    lv_arc_set_rotation(d->range_arc, 0);
+    lv_arc_set_bg_angles(d->range_arc, 0, 0);
+    lv_arc_set_range(d->range_arc, 0, 100);
+    lv_arc_set_value(d->range_arc, 0);
+    lv_obj_remove_style(d->range_arc, NULL, LV_PART_KNOB);
+    lv_obj_set_style_arc_width(d->range_arc, 0, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(d->range_arc, 12, LV_PART_MAIN);
+    lv_obj_set_style_arc_rounded(d->range_arc, true, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(d->range_arc, lv_color_hex(0x2A2A2C), LV_PART_MAIN);
+    lv_obj_remove_flag(d->range_arc, LV_OBJ_FLAG_CLICKABLE);
 
-    /* out-of-bounds red arc overlay */
-    d->arc = lv_arc_create(p->root);
-    lv_obj_set_pos(d->arc, 0, 50);
-    lv_obj_set_size(d->arc, 240, 240);
-    lv_obj_remove_style(d->arc, NULL, LV_PART_KNOB);
-    lv_obj_set_style_arc_color(d->arc, lv_color_hex(XK_COLOR_RED), LV_PART_INDICATOR);
-    lv_obj_set_style_arc_width(d->arc, 6, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_rounded(d->arc, true, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_opa(d->arc, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_arc_set_bg_angles(d->arc, 0, 0);
-    lv_obj_clear_flag(d->arc, LV_OBJ_FLAG_CLICKABLE);
+    /* 越界红弧: 出界时从量程窗口边缘溢出 (X-Knob 语言) */
+    d->red_arc = lv_arc_create(p->root);
+    lv_obj_set_size(d->red_arc, 204, 204);
+    lv_obj_set_pos(d->red_arc, 18, 66);
+    lv_arc_set_rotation(d->red_arc, 0);
+    lv_arc_set_bg_angles(d->red_arc, 0, 0);
+    lv_arc_set_range(d->red_arc, 0, 100);
+    lv_arc_set_value(d->red_arc, 0);
+    lv_obj_remove_style(d->red_arc, NULL, LV_PART_KNOB);
+    lv_obj_set_style_arc_width(d->red_arc, 12, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_rounded(d->red_arc, true, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(d->red_arc, lv_color_hex(XK_COLOR_RED), LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(d->red_arc, 0, LV_PART_MAIN);
+    lv_obj_remove_flag(d->red_arc, LV_OBJ_FLAG_CLICKABLE);
 
+    /* 内层渐变圆 (下沉感) */
+    lv_obj_t *inner = lv_obj_create(p->root);
+    lv_obj_remove_style_all(inner);
+    lv_obj_set_size(inner, 176, 176);
+    lv_obj_set_pos(inner, 32, 80);
+    lv_obj_set_style_bg_color(inner, lv_color_hex(0x0E0E10), 0);
+    lv_obj_set_style_bg_grad_color(inner, lv_color_hex(0x17171B), 0);
+    lv_obj_set_style_bg_grad_dir(inner, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_bg_opa(inner, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(inner, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_color(inner, lv_color_hex(0x232327), 0);
+    lv_obj_set_style_border_width(inner, 1, 0);
+    lv_obj_clear_flag(inner, LV_OBJ_FLAG_CLICKABLE);
+
+    /* 主题蓝指示圆点 */
+    d->dot = lv_obj_create(p->root);
+    lv_obj_remove_style_all(d->dot);
+    lv_obj_set_size(d->dot, 12, 12);
+    lv_obj_set_style_bg_color(d->dot, lv_color_hex(XK_COLOR_ACCENT), 0);
+    lv_obj_set_style_bg_opa(d->dot, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(d->dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_clear_flag(d->dot, LV_OBJ_FLAG_CLICKABLE);
+
+    /* 中央大数值 */
     d->label_value = lv_label_create(p->root);
     lv_obj_set_style_text_color(d->label_value, lv_color_hex(XK_COLOR_TEXT), 0);
     lv_obj_set_style_text_font(d->label_value, &lv_font_montserrat_48, 0);
@@ -203,6 +255,7 @@ static void pg_playground_create(page_t *p)
     pg_apply_mode(d);
     d->timer = lv_timer_create(pg_playground_timer, 50, d);
 
+    lv_obj_remove_flag(p->root, LV_OBJ_FLAG_SCROLLABLE);
     /* 整页点击切换模式 (页面根容器) */
     lv_obj_add_flag(p->root, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(p->root, pg_tap_cb, LV_EVENT_CLICKED, p);
