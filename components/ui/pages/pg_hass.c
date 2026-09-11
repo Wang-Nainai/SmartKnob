@@ -69,7 +69,6 @@ typedef struct {
     lv_obj_t *label_state;  /* 已开启/已关闭 */
     lv_obj_t *label_name;   /* 设备名 */
     lv_obj_t *label_hint;   /* 底部操作提示(按设备变化) */
-    int dot_deg;            /* 指示圆点角度 (0=12点方向, 顺时针) */
     bool dev_on[HASS_DEVICE_NUM];  /* 本地模拟的开/关状态 */
     int ac_temp;            /* 空调本地模拟温度 16..30 */
     int ac_fan;             /* 空调风速 0自动 1低 2中 3高 */
@@ -197,9 +196,28 @@ static void hass_dot_at(hass_data_t *d, int deg)
                           168 - (int32_t)(96.0f * cosf(rad)) - 6);
 }
 
-static void hass_indic_update(hass_data_t *d)
+/* 空调电机模式: 温度 16..30 -> 15 个档位 (0..14), 风速 4 档 (0..3) */
+static void hass_ac_motor_mode(hass_data_t *d)
 {
-    hass_dot_at(d, d->dot_deg);
+    if (d->ac_mode == 0) {
+        motor_set_mode_range(MOTOR_MODE_COARSE_STRONG_DETENTS, 0, 14, d->ac_temp - 16);
+    } else {
+        motor_set_mode_range(MOTOR_MODE_COARSE_STRONG_DETENTS, 0, 3, d->ac_fan);
+    }
+}
+
+/* 指示圆点按当前状态定位: 灯=开/关位, 空调温度=满环比例, 风速=四象限 */
+static void hass_update_dot(hass_data_t *d)
+{
+    if (d->focus == HASS_DEV_AC) {
+        if (d->ac_mode == 0) {
+            hass_dot_at(d, (d->ac_temp - 16) * 360 / 14);
+        } else {
+            hass_dot_at(d, d->ac_fan * 90);
+        }
+    } else {
+        hass_dot_at(d, d->dev_on[d->focus] ? 300 : 240);
+    }
 }
 
 /* 控制视图状态刷新: 状态字/图标圆底/圆环填充/提示 联动 */
@@ -214,40 +232,42 @@ static void hass_ctrl_visual(hass_data_t *d)
     lv_obj_set_style_bg_color(d->icon_circle, lv_color_hex(on ? XK_COLOR_ACCENT : 0x1C1C1E), 0);
     lv_obj_set_style_text_color(d->icon, lv_color_hex(on ? XK_COLOR_TEXT : 0x8E8E93), 0);
     if (is_ac) {
-        /* 圆底内直接显示当前调节值: 温度=大数字, 风速=档位文字; 填充弧隐藏 */
-        lv_arc_set_angles(d->dial, 0, 0);
         if (d->ac_mode == 0) {
+            /* 温度: 圆环按 16..30 比例填充, 30° = 满环 */
+            int deg = (d->ac_temp - 16) * 360 / 14;
+            if (deg > 360) deg = 360;
+            lv_obj_set_style_arc_color(d->dial, lv_color_hex(on ? XK_COLOR_ACCENT : 0x3A3A3A), LV_PART_INDICATOR);
+            lv_arc_set_angles(d->dial, 0, deg);
             lv_obj_set_style_text_font(d->icon, &lv_font_montserrat_48, 0);
             char buf[8];
             snprintf(buf, sizeof(buf), "%d", d->ac_temp);
             lv_label_set_text(d->icon, buf);
         } else {
+            /* 风速: 不填充, 圆点停在四个象限位置 */
+            lv_arc_set_angles(d->dial, 0, 0);
             lv_obj_set_style_text_font(d->icon, &lv_font_msyh_16, 0);
             lv_label_set_text(d->icon, ac_fan_names[d->ac_fan]);
         }
         lv_label_set_text(d->label_hint, "\xE7\x82\xB9\xE5\x9B\xBE\xE6\xA0\x87\xE5\x88\x87\xE6\x8D\xA2\xE6\xB8\xA9\xE5\xBA\xA6/\xE9\xA3\x8E\xE9\x80\x9F"); /* 点图标切换温度/风速 */
-        hass_indic_update(d);
     } else {
-        /* 灯只有开/关: 两档开/关模式, 圆点停在"开"位(300°)或"关"位(240°) */
+        /* 灯只有开/关: 圆点停在"开"位(300°)或"关"位(240°) */
         lv_arc_set_angles(d->dial, 0, 0);
-        lv_obj_clear_flag(d->dot, LV_OBJ_FLAG_HIDDEN);
-        hass_dot_at(d, d->dev_on[d->focus] ? 300 : 240);
         lv_obj_set_style_text_font(d->icon, &lv_font_montserrat_48, 0);
         lv_label_set_text(d->icon, device_icons[d->focus]);
         lv_label_set_text(d->label_hint, "\xE7\x82\xB9\xE5\x87\xBB\xE5\xBC\x80\xE5\x85\xB3 \xC2\xB7 \xE6\x97\x8B\xE8\xBD\xAC\xE5\x90\x8C\xE6\x95\x88"); /* 点击开关 · 旋转同效 */
     }
+    hass_update_dot(d);
 }
 
 static void hass_show_control(hass_data_t *d, bool ctrl)
 {
     d->in_control = ctrl;
     if (ctrl) {
-        d->dot_deg = 0;
         hass_ctrl_visual(d);
         lv_obj_clear_flag(d->ctrl_scr, LV_OBJ_FLAG_HIDDEN);
         if (d->focus == HASS_DEV_AC) {
-            /* 棘轮档: 每转一档"咔哒"一声 = 一步调节 */
-            motor_set_mode(MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
+            /* 温度/风速: 每度一个档位 */
+            hass_ac_motor_mode(d);
         } else {
             /* 灯: 开/关两档, 初始档位=当前状态 */
             motor_set_mode_range(MOTOR_MODE_ON_OFF, 0, 1, d->dev_on[d->focus] ? 1 : 0);
@@ -322,6 +342,7 @@ static void hass_icon_cb(lv_event_t *e)
     if (d->focus == HASS_DEV_AC) {
         d->ac_mode ^= 1;
         hass_ctrl_visual(d);
+        hass_ac_motor_mode(d);   /* 模式切换后电机档位跟着换 */
         pm_shake();
     } else {
         hass_toggle_power(d);
@@ -542,29 +563,24 @@ static void pg_hass_on_rotate(page_t *p, int32_t steps)
     hass_data_t *d = p->data;
     if (d->in_control) {
         if (d->focus == HASS_DEV_AC) {
-            /* 节流: 快转时最多 10 条/秒, 避免 MQTT 洪泛 */
-            static uint32_t last_cmd_tick = 0;
-            uint32_t now = lv_tick_get();
-            if (now - last_cmd_tick < 100) {
-                return;
-            }
-            last_cmd_tick = now;
-            int dir = steps > 0 ? 1 : -1;
+            /* 空调: 电机档位即值, 边沿触发发布(只在变化时发, 不洪泛) */
+            int32_t pos = motor_get_position();
             if (d->ac_mode == 0) {
-                /* 温度模式: 本地模拟 16..30, 每事件 1 度 */
-                d->ac_temp += dir;
-                if (d->ac_temp < 16) d->ac_temp = 16;
-                if (d->ac_temp > 30) d->ac_temp = 30;
-                mqtt_ha_publish_action(d->focus, dir > 0 ? "temp_up" : "temp_down");
+                int t = 16 + pos;
+                if (t != d->ac_temp) {
+                    mqtt_ha_publish_action(d->focus, t > d->ac_temp ? "temp_up" : "temp_down");
+                    d->ac_temp = t;
+                    hass_ctrl_visual(d);
+                    pm_shake();
+                }
             } else {
-                /* 风速模式: 自动/低/中/高 循环 */
-                d->ac_fan = ((d->ac_fan + dir) % 4 + 4) % 4;
-                mqtt_ha_publish_action(d->focus, dir > 0 ? "fan_up" : "fan_down");
+                if (pos != d->ac_fan) {
+                    mqtt_ha_publish_action(d->focus, pos > d->ac_fan ? "fan_up" : "fan_down");
+                    d->ac_fan = pos;
+                    hass_ctrl_visual(d);
+                    pm_shake();
+                }
             }
-            d->dot_deg += dir * 5;
-            hass_ctrl_visual(d);
-            hass_indic_update(d);
-            pm_shake();
         } else {
             /* 灯: 转动即控制开关 —— 顺时针=开, 逆时针=关 (电机两档, 位置即状态) */
             int32_t pos = motor_get_position();
@@ -578,7 +594,7 @@ static void pg_hass_on_rotate(page_t *p, int32_t steps)
             }
         }
     } else {
-        /* 无级循环: 灯光->空调->风扇->洗衣机->灯光... */
+        /* 无级循环: 卧室灯->客厅灯->过道灯->卧室空调->卧室灯... */
         d->focus = ((d->focus + steps) % HASS_DEVICE_NUM + HASS_DEVICE_NUM) % HASS_DEVICE_NUM;
         hass_set_focus(d, d->focus, (int)steps);
     }
@@ -604,7 +620,10 @@ static void pg_hass_on_back(page_t *p)
 static void pg_hass_on_resume(page_t *p)
 {
     hass_data_t *d = p->data;
-    if (d->in_control && d->focus != HASS_DEV_AC) {
+    if (d->in_control && d->focus == HASS_DEV_AC) {
+        /* 空调: 温度/风速档位恢复 */
+        hass_ac_motor_mode(d);
+    } else if (d->in_control) {
         /* 灯: 恢复开/关两档, 档位对齐当前状态 */
         motor_set_mode_range(MOTOR_MODE_ON_OFF, 0, 1, d->dev_on[d->focus] ? 1 : 0);
     } else {
