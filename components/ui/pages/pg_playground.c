@@ -43,6 +43,7 @@ static void pg_apply_mode(pg_data_t *d)
         d->win_deg0 = 240;
         d->win_span = 60;
         lv_arc_set_bg_angles(d->range_arc, 240, 300);
+        lv_arc_set_range(d->range_arc, 0, 1);
         break;
     }
     case MOTOR_MODE_ADJUSTER: {
@@ -51,6 +52,7 @@ static void pg_apply_mode(pg_data_t *d)
         d->win_deg0 = 12;   /* 0 档在 12°, 每档 24°(物理角), 14 档到 348° */
         d->win_span = 336;
         lv_arc_set_bg_angles(d->range_arc, 12, 348);
+        lv_arc_set_range(d->range_arc, 0, 14);
         break;
     }
     case MOTOR_MODE_UNBOUND_NO_DETENTS:
@@ -76,6 +78,7 @@ static void pg_apply_mode(pg_data_t *d)
         d->win_span = WIN_SPAN_BOUND;
         lv_arc_set_bg_angles(d->range_arc, WIN_DEG0_BOUND,
                              WIN_DEG0_BOUND + WIN_SPAN_BOUND);
+        lv_arc_set_range(d->range_arc, 0, max - min);
         break;
     }
     }
@@ -98,21 +101,19 @@ static void pg_playground_timer(lv_timer_t *t)
     int32_t pos = motor_get_position();
     float off = motor_get_angle_offset_deg();
 
-    /* 指示圆点角度: 有界模式按量程线性映射进窗口, 开/关固定 60° 窗,
-     * 无界模式每档 5° 绕全周 */
-    int32_t deg;
     if (d->win_span == 360) {
-        deg = (int32_t)(pos % 72) * 5;
-    } else if (d->win_max > d->win_min) {
-        float t = (float)(pos - d->win_min) / (float)(d->win_max - d->win_min);
-        if (t < 0) t = 0;
-        if (t > 1) t = 1;
-        deg = d->win_deg0 + (int32_t)(t * d->win_span);
+        /* 无界: 圆点绕全周 (纯位置指示, 无窗口无填充) */
+        lv_obj_clear_flag(d->dot, LV_OBJ_FLAG_HIDDEN);
+        pg_dot_set(d, (int32_t)(pos % 72) * 5);
     } else {
-        deg = d->win_deg0;
-        if (pos > 0) deg = d->win_deg0 + d->win_span;
+        /* 有界: 填充弧在同一根窗口弧里从窗口起点长出来 (窗口弧=背景) */
+        lv_obj_add_flag(d->dot, LV_OBJ_FLAG_HIDDEN);
+        int32_t v = pos - d->win_min;
+        if (v < 0) v = 0;
+        int32_t vmax = d->win_max - d->win_min;
+        if (v > vmax) v = vmax;
+        lv_arc_set_value(d->range_arc, v);
     }
-    pg_dot_set(d, deg);
 
     char buf[24];
     snprintf(buf, sizeof(buf), "%ld", (long)pos);
@@ -200,7 +201,7 @@ static void pg_playground_create(page_t *p)
     lv_obj_set_style_arc_color(d->track, lv_color_hex(0x1C1C1E), LV_PART_MAIN);
     lv_obj_remove_flag(d->track, LV_OBJ_FLAG_CLICKABLE);
 
-    /* 量程窗口弧 (有界模式: 稍亮的弧段显示合法范围) */
+    /* 量程窗口弧 (有界模式: main=量程背景弧, indicator=值填充弧, 同一根) */
     d->range_arc = lv_arc_create(p->root);
     lv_obj_set_size(d->range_arc, 204, 204);
     lv_obj_set_pos(d->range_arc, 18, 66);
@@ -209,10 +210,12 @@ static void pg_playground_create(page_t *p)
     lv_arc_set_range(d->range_arc, 0, 100);
     lv_arc_set_value(d->range_arc, 0);
     lv_obj_remove_style(d->range_arc, NULL, LV_PART_KNOB);
-    lv_obj_set_style_arc_width(d->range_arc, 0, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(d->range_arc, 12, LV_PART_INDICATOR);
     lv_obj_set_style_arc_width(d->range_arc, 12, LV_PART_MAIN);
+    lv_obj_set_style_arc_rounded(d->range_arc, true, LV_PART_INDICATOR);
     lv_obj_set_style_arc_rounded(d->range_arc, true, LV_PART_MAIN);
     lv_obj_set_style_arc_color(d->range_arc, lv_color_hex(0x2A2A2C), LV_PART_MAIN);
+    lv_obj_set_style_arc_color(d->range_arc, lv_color_hex(XK_COLOR_ACCENT), LV_PART_INDICATOR);
     lv_obj_remove_flag(d->range_arc, LV_OBJ_FLAG_CLICKABLE);
 
     /* 越界红弧: 出界时从量程窗口边缘溢出 (X-Knob 语言) */
