@@ -29,17 +29,26 @@ LV_FONT_DECLARE(lv_font_msyh_16);
 #define SWIPE_PX      20
 
 static const char *device_names[HASS_DEVICE_NUM] = {
-    "\xE7\x81\xAF\xE5\x85\x89",   /* 灯光 */
-    "\xE7\xA9\xBA\xE8\xB0\x83",   /* 空调 */
-    "\xE9\xA3\x8E\xE6\x89\x87",   /* 风扇 */
-    "\xE6\xB4\x97\xE8\xA1\xA3\xE6\x9C\xBA", /* 洗衣机 */
+    "\xE5\x8D\xA7\xE5\xAE\xA4\xE7\x81\xAF",               /* 卧室灯 */
+    "\xE5\xAE\xA2\xE5\x8E\x85\xE7\x81\xAF",               /* 客厅灯 */
+    "\xE8\xBF\x87\xE9\x81\x93\xE7\x81\xAF",               /* 过道灯 */
+    "\xE5\x8D\xA7\xE5\xAE\xA4\xE7\xA9\xBA\xE8\xB0\x83",   /* 卧室空调 */
 };
 
+#define HASS_DEV_AC 3   /* 槽位 3 = 空调(开关/温度/风速) */
+
 static const char *device_icons[HASS_DEVICE_NUM] = {
-    LV_SYMBOL_POWER,    /* 灯光: 电源/开关 */
+    LV_SYMBOL_EYE_OPEN, /* 灯: 亮起 */
+    LV_SYMBOL_EYE_OPEN,
+    LV_SYMBOL_EYE_OPEN,
     LV_SYMBOL_TINT,     /* 空调: 冷凝水滴 */
-    LV_SYMBOL_REFRESH,  /* 风扇: 旋转叶片 */
-    LV_SYMBOL_LOOP,     /* 洗衣机: 滚筒循环 */
+};
+
+static const char *ac_fan_names[4] = {
+    "\xE8\x87\xAA\xE5\x8A\xA8", /* 自动 */
+    "\xE4\xBD\x8E\xE9\x80\x9F", /* 低速 */
+    "\xE4\xB8\xAD\xE9\x80\x9F", /* 中速 */
+    "\xE9\xAB\x98\xE9\x80\x9F", /* 高速 */
 };
 
 typedef struct {
@@ -59,8 +68,12 @@ typedef struct {
     lv_obj_t *icon;         /* 设备图标 */
     lv_obj_t *label_state;  /* 已开启/已关闭 */
     lv_obj_t *label_name;   /* 设备名 */
-    int dot_deg;            /* 指示弧角度 (0=12点方向, 顺时针) */
+    lv_obj_t *label_hint;   /* 底部操作提示(按设备变化) */
+    int dot_deg;            /* 指示圆点角度 (0=12点方向, 顺时针) */
     bool dev_on[HASS_DEVICE_NUM];  /* 本地模拟的开/关状态 */
+    int ac_temp;            /* 空调本地模拟温度 16..30 */
+    int ac_fan;             /* 空调风速 0自动 1低 2中 3高 */
+    int ac_mode;            /* 空调调节模式 0=温度 1=风速 */
 } hass_data_t;
 
 static hass_data_t *s_hass;   /* 行回调取实例用 (单实例页面) */
@@ -186,17 +199,34 @@ static void hass_indic_update(hass_data_t *d)
     lv_obj_set_pos(d->dot, x, y);
 }
 
-/* 控制视图状态刷新: 状态字/图标圆底随 开关状态 联动 */
+/* 控制视图状态刷新: 设备名/状态字/中央内容/提示 全部联动 */
 static void hass_ctrl_visual(hass_data_t *d)
 {
     bool on = d->dev_on[d->focus];
+    bool is_ac = (d->focus == HASS_DEV_AC);
     lv_label_set_text(d->label_name, device_names[d->focus]);
-    lv_label_set_text(d->icon, device_icons[d->focus]);
     lv_label_set_text(d->label_state, on ? "\xE5\xB7\xB2\xE5\xBC\x80\xE5\x90\xAF"   /* 已开启 */
                                          : "\xE5\xB7\xB2\xE5\x85\xB3\xE9\x97\xAD"); /* 已关闭 */
     lv_obj_set_style_text_color(d->label_state, lv_color_hex(on ? XK_COLOR_TEXT : XK_COLOR_GRAY), 0);
     lv_obj_set_style_bg_color(d->icon_circle, lv_color_hex(on ? XK_COLOR_ACCENT : 0x1C1C1E), 0);
     lv_obj_set_style_text_color(d->icon, lv_color_hex(on ? XK_COLOR_TEXT : 0x8E8E93), 0);
+    if (is_ac) {
+        /* 圆底内直接显示当前调节值: 温度=大数字, 风速=档位文字 */
+        if (d->ac_mode == 0) {
+            lv_obj_set_style_text_font(d->icon, &lv_font_montserrat_48, 0);
+            char buf[8];
+            snprintf(buf, sizeof(buf), "%d", d->ac_temp);
+            lv_label_set_text(d->icon, buf);
+        } else {
+            lv_obj_set_style_text_font(d->icon, &lv_font_msyh_16, 0);
+            lv_label_set_text(d->icon, ac_fan_names[d->ac_fan]);
+        }
+        lv_label_set_text(d->label_hint, "\xE7\x82\xB9\xE5\x9B\xBE\xE6\xA0\x87\xE5\x88\x87\xE6\x8D\xA2\xE6\xB8\xA9\xE5\xBA\xA6/\xE9\xA3\x8E\xE9\x80\x9F"); /* 点图标切换温度/风速 */
+    } else {
+        lv_obj_set_style_text_font(d->icon, &lv_font_montserrat_48, 0);
+        lv_label_set_text(d->icon, device_icons[d->focus]);
+        lv_label_set_text(d->label_hint, "\xE6\x97\x8B\xE8\xBD\xAC\xE8\xB0\x83\xE4\xBA\xAE\xE5\xBA\xA6 \xC2\xB7 \xE7\x82\xB9\xE5\x87\xBB\xE5\xBC\x80\xE5\x85\xB3"); /* 旋转调亮度 · 点击开关 */
+    }
 }
 
 static void hass_show_control(hass_data_t *d, bool ctrl)
@@ -240,6 +270,17 @@ static void hass_row_cb(lv_event_t *e)
     pm_shake();
 }
 
+/* 开/关切换 (所有设备) */
+static void hass_toggle_power(hass_data_t *d)
+{
+    bool on = !d->dev_on[d->focus];
+    d->dev_on[d->focus] = on;
+    mqtt_ha_publish_cmd(device_names[d->focus], on ? "ON" : "OFF");
+    mqtt_ha_publish_action(d->focus, on ? "on" : "off");
+    hass_ctrl_visual(d);
+    pm_shake();
+}
+
 /* 控制视图点击 → 开/关切换 */
 static void hass_tap_cb(lv_event_t *e)
 {
@@ -248,12 +289,24 @@ static void hass_tap_cb(lv_event_t *e)
     if (!d->in_control) {
         return;
     }
-    bool on = !d->dev_on[d->focus];
-    d->dev_on[d->focus] = on;
-    mqtt_ha_publish_cmd(device_names[d->focus], on ? "ON" : "OFF");
-    mqtt_ha_publish_action(d->focus, on ? "ON" : "OFF");
-    hass_ctrl_visual(d);
-    pm_shake();
+    hass_toggle_power(d);
+}
+
+/* 中央图标圆底点击: 空调=切换 温度/风速 模式, 灯=开/关 */
+static void hass_icon_cb(lv_event_t *e)
+{
+    page_t *p = (page_t *)lv_event_get_user_data(e);
+    hass_data_t *d = p->data;
+    if (!d->in_control) {
+        return;
+    }
+    if (d->focus == HASS_DEV_AC) {
+        d->ac_mode ^= 1;
+        hass_ctrl_visual(d);
+        pm_shake();
+    } else {
+        hass_toggle_power(d);
+    }
 }
 
 static void pg_hass_create(page_t *p)
@@ -401,7 +454,7 @@ static void pg_hass_create(page_t *p)
     lv_obj_set_style_border_width(inner, 1, 0);
     lv_obj_clear_flag(inner, LV_OBJ_FLAG_CLICKABLE);
 
-    /* 中央图标圆底 (开启=主题蓝, 关闭=暗灰), 内嵌设备图标 */
+    /* 中央图标圆底 (开启=主题蓝, 关闭=暗灰), 空调模式时可点切换调节模式 */
     lv_obj_t *ic = lv_obj_create(d->ctrl_scr);
     d->icon_circle = ic;
     lv_obj_remove_style_all(ic);
@@ -412,13 +465,16 @@ static void pg_hass_create(page_t *p)
     lv_obj_set_style_bg_opa(ic, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(ic, 1, 0);
     lv_obj_set_style_border_color(ic, lv_color_hex(0x2A2A2C), 0);
-    lv_obj_clear_flag(ic, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(ic, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(ic, hass_icon_cb, LV_EVENT_CLICKED, p);
 
     lv_obj_t *icon = lv_label_create(ic);
     d->icon = icon;
     lv_obj_set_style_text_color(icon, lv_color_hex(0x8E8E93), 0);
     lv_obj_set_style_text_font(icon, &lv_font_montserrat_48, 0);
     lv_label_set_text(icon, device_icons[0]);
+    /* 标签若可点击会抢走圆底的命中目标, 必须关闭 */
+    lv_obj_clear_flag(icon, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_center(icon);
 
     /* 中央偏下状态字 */
@@ -436,12 +492,17 @@ static void pg_hass_create(page_t *p)
     lv_obj_set_style_text_font(name, &lv_font_msyh_16, 0);
     lv_obj_align(name, LV_ALIGN_TOP_MID, 0, 34);
 
-    /* 底部操作提示 */
+    /* 底部操作提示 (按设备变化, 在 hass_ctrl_visual 中更新) */
     lv_obj_t *hint = lv_label_create(d->ctrl_scr);
+    d->label_hint = hint;
     lv_obj_set_style_text_color(hint, lv_color_hex(XK_COLOR_FAINT), 0);
     lv_obj_set_style_text_font(hint, &lv_font_msyh_16, 0);
-    lv_label_set_text(hint, "\xE6\x97\x8B\xE8\xBD\xAC\xE8\xB0\x83\xE8\x8A\x82 \xC2\xB7 \xE7\x82\xB9\xE5\x87\xBB\xE5\xBC\x80\xE5\x85\xB3"); /* 旋转调节 · 点击开关 */
     lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -10);
+
+    d->ac_temp = 26;
+    d->ac_fan = 0;
+    d->ac_mode = 0;
+    hass_ctrl_visual(d);
 
     motor_set_mode(MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
     hass_set_focus(d, 0, 0);
@@ -468,8 +529,24 @@ static void pg_hass_on_rotate(page_t *p, int32_t steps)
             return;
         }
         last_cmd_tick = now;
-        mqtt_ha_publish_cmd(device_names[d->focus], steps > 0 ? "RIGHT" : "LEFT");
-        mqtt_ha_publish_action(d->focus, steps > 0 ? "RIGHT" : "LEFT");
+        int dir = steps > 0 ? 1 : -1;
+        if (d->focus == HASS_DEV_AC) {
+            if (d->ac_mode == 0) {
+                /* 温度模式: 本地模拟 16..30, 每事件 1 度 */
+                d->ac_temp += dir;
+                if (d->ac_temp < 16) d->ac_temp = 16;
+                if (d->ac_temp > 30) d->ac_temp = 30;
+                mqtt_ha_publish_action(d->focus, dir > 0 ? "temp_up" : "temp_down");
+            } else {
+                /* 风速模式: 自动/低/中/高 循环 */
+                d->ac_fan = ((d->ac_fan + dir) % 4 + 4) % 4;
+                mqtt_ha_publish_action(d->focus, dir > 0 ? "fan_up" : "fan_down");
+            }
+            hass_ctrl_visual(d);
+        } else {
+            /* 灯: 亮度步进 */
+            mqtt_ha_publish_action(d->focus, dir > 0 ? "bright_up" : "bright_down");
+        }
         d->dot_deg += (int)steps * 5;
         hass_indic_update(d);
         pm_shake();

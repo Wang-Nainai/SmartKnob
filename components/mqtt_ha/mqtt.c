@@ -22,6 +22,7 @@ void mqtt_ha_publish(uint16_t co2_ppm, float temp_c, float humidity_pct) { (void
 bool mqtt_ha_is_connected(void) { return false; }
 bool mqtt_ha_is_configured(void) { return false; }
 void mqtt_ha_publish_cmd(const char *device, const char *cmd) { (void)device; (void)cmd; }
+void mqtt_ha_publish_action(int dev_idx, const char *act) { (void)dev_idx; (void)act; }
 #else
 
 static esp_mqtt_client_handle_t s_client = NULL;
@@ -43,26 +44,40 @@ static volatile uint8_t s_has_data = 0;
 #define MQTT_DEV_NUM 4
 
 /* ---------------- HA 设备自动化触发器 (旋钮 → HA 任意设备) ----------------
- * 发布 16 个 device_automation 触发器(4 设备 x on/off/left/right)的发现配置,
- * HA 界面里 SmartKnob 设备出现这些"动作", 自动化可视化绑定到任意实体, 无需 YAML。
- * 触发消息: smartknob/action  payload = <dev>_<act> (如 light_on) */
+ * 真实设备槽位: 3 盏灯(开关/亮度步进) + 卧室空调(开关/温度/风速).
+ * 触发消息: smartknob/action  payload = <dev>_<act> (如 bedroom_light_on)
+ * HA 侧用单条 YAML 自动化按 payload 映射到真实实体 */
 
-static const char *ha_dev_keys[MQTT_DEV_NUM] = {"light", "ac", "fan", "washer"};
-static const char *ha_dev_acts[4] = {"on", "off", "left", "right"};
+static const char *ha_dev_keys[MQTT_DEV_NUM] = {
+    "bedroom_light", "living_light", "hall_light", "bedroom_ac",
+};
 
-static void publish_trigger_one(esp_mqtt_client_handle_t client, int dev, int act)
+typedef struct {
+    uint8_t dev;
+    const char *act;
+} ha_trig_t;
+
+static const ha_trig_t ha_trigs[] = {
+    {0, "on"}, {0, "off"}, {0, "bright_up"}, {0, "bright_down"},
+    {1, "on"}, {1, "off"}, {1, "bright_up"}, {1, "bright_down"},
+    {2, "on"}, {2, "off"}, {2, "bright_up"}, {2, "bright_down"},
+    {3, "on"}, {3, "off"}, {3, "temp_up"}, {3, "temp_down"}, {3, "fan_up"}, {3, "fan_down"},
+};
+#define HA_TRIG_NUM (sizeof(ha_trigs) / sizeof(ha_trigs[0]))
+
+static void publish_trigger_one(esp_mqtt_client_handle_t client, int t)
 {
     char topic[160];
     char payload[320];
     snprintf(topic, sizeof(topic),
              "homeassistant/device_automation/" MQTT_DEVICE "/%s_%s/config",
-             ha_dev_keys[dev], ha_dev_acts[act]);
+             ha_dev_keys[ha_trigs[t].dev], ha_trigs[t].act);
     snprintf(payload, sizeof(payload),
              "{\"automation_type\":\"trigger\",\"topic\":\"smartknob/action\","
              "\"payload\":\"%s_%s\",\"type\":\"action\",\"subtype\":\"button_%d\","
              "\"device\":{\"identifiers\":[\"" MQTT_DEVICE "\"],\"name\":\"SmartKnob\","
              "\"manufacturer\":\"DIY\",\"model\":\"SmartKnob\"}}",
-             ha_dev_keys[dev], ha_dev_acts[act], dev * 4 + act + 1);
+             ha_dev_keys[ha_trigs[t].dev], ha_trigs[t].act, t + 1);
     esp_mqtt_client_publish(client, topic, payload, 0, 1, 1);
 }
 
@@ -107,8 +122,8 @@ static void disc_timer_cb(void *arg)
     if (!s_connected || !s_client) {
         return;
     }
-    if (s_disc_i < MQTT_DEV_NUM * 4) {
-        publish_trigger_one(s_client, s_disc_i / 4, s_disc_i % 4);
+    if (s_disc_i < (int)HA_TRIG_NUM) {
+        publish_trigger_one(s_client, s_disc_i);
         s_disc_i++;
     } else {
         esp_timer_stop(s_disc_timer);
@@ -317,22 +332,16 @@ void mqtt_ha_publish_cmd(const char *device, const char *cmd)
     xSemaphoreGive(s_client_mux);
 }
 
-/* HA 设备自动化动作: dev_idx(0-3) + cmd("ON"/"OFF"/"LEFT"/"RIGHT")
- * 发布 smartknob/action, HA 触发器(发现配置见 publish_device_automation)捕获后
- * 可在自动化里绑定到任意实体 —— 旋钮直接控制 HA 设备的标准通道 */
-void mqtt_ha_publish_action(int dev_idx, const char *cmd)
+/* HA 设备自动化动作: dev_idx(0-3) + act("on"/"off"/"bright_up"/"temp_up"/...)
+ * 发布 smartknob/action, payload = <dev>_<act>, HA 触发器捕获后
+ * 在自动化里绑定到真实实体 —— 旋钮直接控制 HA 设备的标准通道 */
+void mqtt_ha_publish_action(int dev_idx, const char *act)
 {
-    if (!s_connected || !s_client_mux || dev_idx < 0 || dev_idx >= MQTT_DEV_NUM || !cmd) {
+    if (!s_connected || !s_client_mux || dev_idx < 0 || dev_idx >= MQTT_DEV_NUM || !act) {
         return;
     }
-    char cmdkey[8] = {0};
-    int i = 0;
-    while (cmd[i] && i < 7) {
-        cmdkey[i] = (cmd[i] >= 'A' && cmd[i] <= 'Z') ? cmd[i] - 'A' + 'a' : cmd[i];
-        i++;
-    }
-    char payload[32];
-    snprintf(payload, sizeof(payload), "%s_%s", ha_dev_keys[dev_idx], cmdkey);
+    char payload[40];
+    snprintf(payload, sizeof(payload), "%s_%s", ha_dev_keys[dev_idx], act);
     xSemaphoreTake(s_client_mux, portMAX_DELAY);
     if (s_connected && s_client) {
         esp_mqtt_client_publish(s_client, "smartknob/action", payload, 0, 1, 0);

@@ -15,6 +15,7 @@ bool mqtt_ha_is_connected(void);
 bool mqtt_ha_is_configured(void);
 /* Publish a HASS control command (X-Knob style): <topic>/HOME/<device> with payload cmd */
 void mqtt_ha_publish_cmd(const char *device, const char *cmd);
-/* HA 设备自动化动作: dev_idx 0-3, cmd "ON"/"OFF"/"LEFT"/"RIGHT"
- * 发布 smartknob/action -> HA 触发器(自动发现)可视化绑定任意实体 */
-void mqtt_ha_publish_action(int dev_idx, const char *cmd);
+/* HA 设备自动化动作: dev_idx 0-3, act 为小写动作名
+ * ("on"/"off"/"bright_up"/"bright_down"/"temp_up"/"temp_down"/"fan_up"/"fan_down")
+ * 发布 smartknob/action, payload = <dev>_<act>, HA 触发器可视化绑定任意实体 */
+void mqtt_ha_publish_action(int dev_idx, const char *act);
