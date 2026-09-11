@@ -71,6 +71,7 @@ typedef struct {
     lv_obj_t *label_hint;   /* 底部操作提示(按设备变化) */
     int dot_deg;            /* 指示圆点角度 (0=12点方向, 顺时针) */
     bool dev_on[HASS_DEVICE_NUM];  /* 本地模拟的开/关状态 */
+    int brightness[HASS_DEVICE_NUM]; /* 灯亮度 0..100 (本地模拟, 旋转调节) */
     int ac_temp;            /* 空调本地模拟温度 16..30 */
     int ac_fan;             /* 空调风速 0自动 1低 2中 3高 */
     int ac_mode;            /* 空调调节模式 0=温度 1=风速 */
@@ -188,18 +189,21 @@ static void hass_scroll_wrap_cb(lv_event_t *e)
     }
 }
 
-/* 指示圆点绕环移动: 每档 5°, 0 = 12点方向, 顺时针为正.
- * 点骑在圆环轨道正中 (轨道带 r=90..102, 中线 96) */
-static void hass_indic_update(hass_data_t *d)
+/* 指示圆点放到指定角度 (骑在轨道中线 r=96, 0 = 12点方向) */
+static void hass_dot_at(hass_data_t *d, int deg)
 {
-    int32_t deg = ((d->dot_deg % 360) + 360) % 360;
+    deg = ((deg % 360) + 360) % 360;
     float rad = (float)deg * 0.01745329f;
-    int32_t x = 120 + (int32_t)(96.0f * sinf(rad)) - 6;
-    int32_t y = 168 - (int32_t)(96.0f * cosf(rad)) - 6;
-    lv_obj_set_pos(d->dot, x, y);
+    lv_obj_set_pos(d->dot, 120 + (int32_t)(96.0f * sinf(rad)) - 6,
+                          168 - (int32_t)(96.0f * cosf(rad)) - 6);
 }
 
-/* 控制视图状态刷新: 设备名/状态字/中央内容/提示 全部联动 */
+static void hass_indic_update(hass_data_t *d)
+{
+    hass_dot_at(d, d->dot_deg);
+}
+
+/* 控制视图状态刷新: 状态字/图标圆底/圆环填充/提示 联动 */
 static void hass_ctrl_visual(hass_data_t *d)
 {
     bool on = d->dev_on[d->focus];
@@ -211,7 +215,8 @@ static void hass_ctrl_visual(hass_data_t *d)
     lv_obj_set_style_bg_color(d->icon_circle, lv_color_hex(on ? XK_COLOR_ACCENT : 0x1C1C1E), 0);
     lv_obj_set_style_text_color(d->icon, lv_color_hex(on ? XK_COLOR_TEXT : 0x8E8E93), 0);
     if (is_ac) {
-        /* 圆底内直接显示当前调节值: 温度=大数字, 风速=档位文字 */
+        /* 圆底内直接显示当前调节值: 温度=大数字, 风速=档位文字; 填充弧隐藏 */
+        lv_arc_set_angles(d->dial, 0, 0);
         if (d->ac_mode == 0) {
             lv_obj_set_style_text_font(d->icon, &lv_font_montserrat_48, 0);
             char buf[8];
@@ -222,9 +227,23 @@ static void hass_ctrl_visual(hass_data_t *d)
             lv_label_set_text(d->icon, ac_fan_names[d->ac_fan]);
         }
         lv_label_set_text(d->label_hint, "\xE7\x82\xB9\xE5\x9B\xBE\xE6\xA0\x87\xE5\x88\x87\xE6\x8D\xA2\xE6\xB8\xA9\xE5\xBA\xA6/\xE9\xA3\x8E\xE9\x80\x9F"); /* 点图标切换温度/风速 */
+        hass_indic_update(d);
     } else {
+        /* 灯: 圆底显示亮度值, 圆环按亮度填充(Apple Watch 音量环), 点在弧头 */
+        int b = d->brightness[d->focus];
+        int deg = b * 36 / 10;   /* % -> 度 (0..360) */
+        lv_obj_set_style_arc_color(d->dial, lv_color_hex(on ? XK_COLOR_ACCENT : 0x3A3A3A), LV_PART_INDICATOR);
+        lv_arc_set_angles(d->dial, 0, deg);
         lv_obj_set_style_text_font(d->icon, &lv_font_montserrat_48, 0);
-        lv_label_set_text(d->icon, device_icons[d->focus]);
+        char buf[8];
+        snprintf(buf, sizeof(buf), "%d", b);
+        lv_label_set_text(d->icon, buf);
+        if (deg > 0) {
+            lv_obj_clear_flag(d->dot, LV_OBJ_FLAG_HIDDEN);
+            hass_dot_at(d, deg);
+        } else {
+            lv_obj_add_flag(d->dot, LV_OBJ_FLAG_HIDDEN);
+        }
         lv_label_set_text(d->label_hint, "\xE6\x97\x8B\xE8\xBD\xAC\xE8\xB0\x83\xE4\xBA\xAE\xE5\xBA\xA6 \xC2\xB7 \xE7\x82\xB9\xE5\x87\xBB\xE5\xBC\x80\xE5\x85\xB3"); /* 旋转调亮度 · 点击开关 */
     }
 }
@@ -236,7 +255,8 @@ static void hass_show_control(hass_data_t *d, bool ctrl)
         d->dot_deg = 0;
         hass_ctrl_visual(d);
         lv_obj_clear_flag(d->ctrl_scr, LV_OBJ_FLAG_HIDDEN);
-        motor_set_mode(MOTOR_MODE_UNBOUND_NO_DETENTS, 0, 0);
+        /* 棘轮档: 每转一档"咔哒"一声 = 一步调节, 旋转才有意义 */
+        motor_set_mode(MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
     } else {
         lv_obj_add_flag(d->ctrl_scr, LV_OBJ_FLAG_HIDDEN);
         motor_set_mode(MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
@@ -502,6 +522,9 @@ static void pg_hass_create(page_t *p)
     d->ac_temp = 26;
     d->ac_fan = 0;
     d->ac_mode = 0;
+    for (int i = 0; i < HASS_DEVICE_NUM; i++) {
+        d->brightness[i] = 60;
+    }
     hass_ctrl_visual(d);
 
     motor_set_mode(MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
@@ -542,12 +565,16 @@ static void pg_hass_on_rotate(page_t *p, int32_t steps)
                 d->ac_fan = ((d->ac_fan + dir) % 4 + 4) % 4;
                 mqtt_ha_publish_action(d->focus, dir > 0 ? "fan_up" : "fan_down");
             }
+            d->dot_deg += dir * 5;
             hass_ctrl_visual(d);
         } else {
-            /* 灯: 亮度步进 */
+            /* 灯: 本地亮度 0..100, 每事件 ±10, 发布亮度步进动作 */
+            d->brightness[d->focus] += dir * 10;
+            if (d->brightness[d->focus] < 0) d->brightness[d->focus] = 0;
+            if (d->brightness[d->focus] > 100) d->brightness[d->focus] = 100;
             mqtt_ha_publish_action(d->focus, dir > 0 ? "bright_up" : "bright_down");
+            hass_ctrl_visual(d);
         }
-        d->dot_deg += (int)steps * 5;
         hass_indic_update(d);
         pm_shake();
     } else {
@@ -577,10 +604,11 @@ static void pg_hass_on_back(page_t *p)
 static void pg_hass_on_resume(page_t *p)
 {
     hass_data_t *d = p->data;
-    motor_set_mode(d->in_control ? MOTOR_MODE_UNBOUND_NO_DETENTS
-                                 : MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
+    motor_set_mode(MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
     if (!d->in_control) {
         hass_set_focus(d, d->focus, 0);
+    } else {
+        hass_ctrl_visual(d);
     }
 }
 
