@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_system.h"
@@ -10,6 +11,7 @@
 #include "esp_system.h"
 
 LV_FONT_DECLARE(lv_font_montserrat_26);
+LV_FONT_DECLARE(lv_font_montserrat_48);
 LV_FONT_DECLARE(lv_font_msyh_16);
 
 /* NVS persistence helpers from smartknob_ui.c */
@@ -52,8 +54,9 @@ typedef struct {
     lv_obj_t *val_labels[ROWS_N];
     lv_obj_t *desc_labels[ROWS_N];
     lv_obj_t *edit_scr;
-    lv_obj_t *scale;
-    lv_obj_t *needle;
+    lv_obj_t *dial;         /* 填充弧 (值比例) */
+    lv_obj_t *bezel;        /* 外围刻度圈 */
+    lv_obj_t *dot;          /* 主题蓝指示圆点 */
     lv_obj_t *label_value;
     lv_obj_t *label_unit;
     lv_timer_t *timer;
@@ -216,13 +219,55 @@ static void setting_refresh_vals(setting_data_t *d)
     setting_set_val(d, SET_BLE, "");
 }
 
+/* 编辑视图表盘刷新: 大值/单位/填充弧/圆点 联动 */
+static void setting_edit_visual(setting_data_t *d)
+{
+    int32_t val;
+    int vmin, vmax;
+    char buf[24];
+    if (d->edit_item == SET_BRIGHTNESS) {
+        val = d->brightness;
+        vmin = 10;
+        vmax = 100;
+        lv_obj_set_style_text_font(d->label_value, &lv_font_montserrat_48, 0);
+        snprintf(buf, sizeof(buf), "%ld", (long)val);
+        lv_label_set_text(d->label_value, buf);
+        lv_obj_clear_flag(d->label_unit, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        val = d->timeout_min;
+        vmin = 0;
+        vmax = 30;
+        if (val == 0) {
+            /* 数字字体无中文字形, 常亮切中文字库 */
+            lv_obj_set_style_text_font(d->label_value, &lv_font_msyh_16, 0);
+            lv_label_set_text(d->label_value, "\xE5\xB8\xB8\xE4\xBA\xAE");
+            lv_obj_add_flag(d->label_unit, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_set_style_text_font(d->label_value, &lv_font_montserrat_48, 0);
+            snprintf(buf, sizeof(buf), "%ld", (long)val);
+            lv_label_set_text(d->label_value, buf);
+            lv_obj_clear_flag(d->label_unit, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    int deg = (int)(((int64_t)(val - vmin) * 360) / (vmax - vmin));
+    if (deg > 360) deg = 360;
+    lv_arc_set_angles(d->dial, 0, deg);
+    if (deg > 0) {
+        lv_obj_clear_flag(d->dot, LV_OBJ_FLAG_HIDDEN);
+        float rad = (float)deg * 0.01745329f;
+        lv_obj_set_pos(d->dot, 120 + (int32_t)(96.0f * sinf(rad)) - 6,
+                              168 - (int32_t)(96.0f * cosf(rad)) - 6);
+    } else {
+        lv_obj_add_flag(d->dot, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 static void setting_show_edit(setting_data_t *d, int item)
 {
     d->edit_item = item;
     lv_obj_clear_flag(d->edit_scr, LV_OBJ_FLAG_HIDDEN);
 
     int32_t init = item == SET_BRIGHTNESS ? d->brightness : d->timeout_min;
-    lv_scale_set_range(d->scale, 0, item == SET_BRIGHTNESS ? 100 : 30);
     if (item == SET_BRIGHTNESS) {
         lv_label_set_text(d->label_unit, "%");
         motor_set_mode_range(MOTOR_MODE_FINE_DETENTS, 10, 100, init);
@@ -230,13 +275,8 @@ static void setting_show_edit(setting_data_t *d, int item)
         /* 31 档 × 8.23° ≈ 255° 全程: 细微模式(1°/档)只挤在 31° 里, 手感太差 */
         lv_label_set_text(d->label_unit, "\xE5\x88\x86\xE9\x92\x9F");
         motor_set_mode_range(MOTOR_MODE_COARSE_STRONG_DETENTS, 0, 30, init);
-        if (init == 0) {
-            /* 大值标签是纯 ASCII 的 montserrat_26, 显示中文需切中文字库 */
-            lv_obj_set_style_text_font(d->label_value, &lv_font_msyh_16, 0);
-            lv_label_set_text(d->label_value, "\xE5\xB8\xB8\xE4\xBA\xAE");
-            lv_obj_add_flag(d->label_unit, LV_OBJ_FLAG_HIDDEN);
-        }
     }
+    setting_edit_visual(d);
     pm_shake();
 }
 
@@ -343,27 +383,13 @@ static void setting_timer_cb(lv_timer_t *t)
     if (d->edit_item < 0) return;
 
     int32_t pos = motor_get_position();
-    char buf[24];
     if (d->edit_item == SET_BRIGHTNESS) {
         d->brightness = pos;
         display_set_brightness(pos);   /* 实时预览 */
-        lv_obj_set_style_text_font(d->label_value, &lv_font_montserrat_26, 0);
-        snprintf(buf, sizeof(buf), "%ld", (long)pos);
-        lv_label_set_text(d->label_value, buf);
     } else {
         d->timeout_min = pos;
-        if (pos == 0) {
-            lv_obj_set_style_text_font(d->label_value, &lv_font_msyh_16, 0);
-            lv_label_set_text(d->label_value, "\xE5\xB8\xB8\xE4\xBA\xAE");
-            lv_obj_add_flag(d->label_unit, LV_OBJ_FLAG_HIDDEN);
-        } else {
-            lv_obj_set_style_text_font(d->label_value, &lv_font_montserrat_26, 0);
-            snprintf(buf, sizeof(buf), "%ld", (long)pos);
-            lv_label_set_text(d->label_value, buf);
-            lv_obj_clear_flag(d->label_unit, LV_OBJ_FLAG_HIDDEN);
-        }
     }
-    lv_scale_set_line_needle_value(d->scale, d->needle, 95, pos);
+    setting_edit_visual(d);
 }
 
 static void pg_setting_create(page_t *p)
@@ -463,51 +489,78 @@ static void pg_setting_create(page_t *p)
     lv_obj_set_user_data(d->edit_scr, p);
     lv_obj_add_flag(d->edit_scr, LV_OBJ_FLAG_HIDDEN);
 
-    d->scale = lv_scale_create(d->edit_scr);
-    lv_obj_set_pos(d->scale, 0, 50);
-    lv_obj_set_size(d->scale, 240, 240);
-    lv_obj_set_style_bg_color(d->scale, lv_color_hex(XK_COLOR_BG), 0);
-    lv_obj_set_style_bg_grad_color(d->scale, lv_color_make(48, 48, 0), 0);
-    lv_obj_set_style_bg_grad_dir(d->scale, LV_GRAD_DIR_VER, 0);
-    lv_obj_set_style_radius(d->scale, LV_RADIUS_CIRCLE, 0);
-    lv_scale_set_mode(d->scale, LV_SCALE_MODE_ROUND_INNER);
-    lv_scale_set_label_show(d->scale, false);
-    lv_obj_set_style_length(d->scale, 6, LV_PART_ITEMS);
-    lv_obj_set_style_line_width(d->scale, 2, LV_PART_ITEMS);
-    lv_obj_set_style_line_color(d->scale, lv_color_hex(XK_COLOR_ACCENT), LV_PART_ITEMS);
-    lv_obj_set_style_length(d->scale, 14, LV_PART_INDICATOR);
-    lv_obj_set_style_line_width(d->scale, 3, LV_PART_INDICATOR);
-    lv_obj_set_style_line_color(d->scale, lv_color_hex(XK_COLOR_ACCENT), LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(d->scale, lv_color_hex(XK_COLOR_ACCENT), LV_PART_MAIN);
-    lv_obj_set_style_arc_width(d->scale, 2, LV_PART_MAIN);
-    lv_scale_set_total_tick_count(d->scale, 41);
-    lv_scale_set_major_tick_every(d->scale, 1);
-    lv_scale_set_range(d->scale, 0, 100);
-    lv_scale_set_angle_range(d->scale, 270);
-    lv_scale_set_rotation(d->scale, 225);
+    /* ---- 编辑视图表盘 (与智能家居/手感页同款 Apple 风格) ----
+     * 外圈刻度圈 -> 全周暗环+填充弧 -> 内层渐变圆 -> 主题蓝圆点 -> 中央大值 */
 
-    static lv_point_precise_t needle_points[2] = { {0, 0}, {0, 0} };
-    d->needle = lv_line_create(d->scale);
-    lv_line_set_points_mutable(d->needle, needle_points, 2);
-    lv_obj_set_style_line_width(d->needle, 8, 0);
-    lv_obj_set_style_line_rounded(d->needle, true, 0);
-    lv_obj_set_style_line_color(d->needle, lv_color_hex(XK_COLOR_ORANGE), 0);
-    lv_scale_set_post_draw(d->scale, true);
-    lv_scale_set_line_needle_value(d->scale, d->needle, 95, 0);
+    d->bezel = lv_scale_create(d->edit_scr);
+    lv_obj_set_size(d->bezel, 232, 232);
+    lv_obj_set_pos(d->bezel, 4, 52);
+    lv_scale_set_mode(d->bezel, LV_SCALE_MODE_ROUND_INNER);
+    lv_scale_set_label_show(d->bezel, false);
+    lv_scale_set_total_tick_count(d->bezel, 73);
+    lv_scale_set_major_tick_every(d->bezel, 6);
+    lv_scale_set_range(d->bezel, 0, 72);
+    lv_scale_set_angle_range(d->bezel, 360);
+    lv_scale_set_rotation(d->bezel, 0);
+    lv_obj_set_style_length(d->bezel, 5, LV_PART_ITEMS);
+    lv_obj_set_style_line_width(d->bezel, 1, LV_PART_ITEMS);
+    lv_obj_set_style_line_color(d->bezel, lv_color_hex(0x2E2E2E), LV_PART_ITEMS);
+    lv_obj_set_style_length(d->bezel, 10, LV_PART_INDICATOR);
+    lv_obj_set_style_line_width(d->bezel, 2, LV_PART_INDICATOR);
+    lv_obj_set_style_line_color(d->bezel, lv_color_hex(0x5A5A5A), LV_PART_INDICATOR);
     /* scale 默认可点击且不冒泡, 会吞掉编辑视图的"点击=保存" */
-    lv_obj_remove_flag(d->scale, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(d->bezel, LV_OBJ_FLAG_CLICKABLE);
+
+    d->dial = lv_arc_create(d->edit_scr);
+    lv_obj_set_size(d->dial, 204, 204);
+    lv_obj_set_pos(d->dial, 18, 66);
+    lv_arc_set_rotation(d->dial, 0);
+    lv_arc_set_bg_angles(d->dial, 0, 360);
+    lv_arc_set_range(d->dial, 0, 100);
+    lv_arc_set_value(d->dial, 0);
+    lv_obj_remove_style(d->dial, NULL, LV_PART_KNOB);
+    lv_obj_set_style_arc_width(d->dial, 12, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(d->dial, 12, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_rounded(d->dial, true, LV_PART_MAIN);
+    lv_obj_set_style_arc_rounded(d->dial, true, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(d->dial, lv_color_hex(0x1C1C1E), LV_PART_MAIN);
+    lv_obj_set_style_arc_color(d->dial, lv_color_hex(XK_COLOR_ACCENT), LV_PART_INDICATOR);
+    lv_obj_remove_flag(d->dial, LV_OBJ_FLAG_CLICKABLE);
+
+    /* 内层渐变圆 (下沉感) */
+    lv_obj_t *inner = lv_obj_create(d->edit_scr);
+    lv_obj_remove_style_all(inner);
+    lv_obj_set_size(inner, 176, 176);
+    lv_obj_set_pos(inner, 32, 80);
+    lv_obj_set_style_bg_color(inner, lv_color_hex(0x0E0E10), 0);
+    lv_obj_set_style_bg_grad_color(inner, lv_color_hex(0x17171B), 0);
+    lv_obj_set_style_bg_grad_dir(inner, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_bg_opa(inner, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(inner, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_color(inner, lv_color_hex(0x232327), 0);
+    lv_obj_set_style_border_width(inner, 1, 0);
+    lv_obj_clear_flag(inner, LV_OBJ_FLAG_CLICKABLE);
+
+    /* 主题蓝指示圆点 (最后创建置顶) */
+    d->dot = lv_obj_create(d->edit_scr);
+    lv_obj_remove_style_all(d->dot);
+    lv_obj_set_size(d->dot, 12, 12);
+    lv_obj_set_style_bg_color(d->dot, lv_color_hex(XK_COLOR_ACCENT), 0);
+    lv_obj_set_style_bg_opa(d->dot, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(d->dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_clear_flag(d->dot, LV_OBJ_FLAG_CLICKABLE);
 
     d->label_value = lv_label_create(d->edit_scr);
     lv_obj_set_style_text_color(d->label_value, lv_color_hex(XK_COLOR_TEXT), 0);
-    lv_obj_set_style_text_font(d->label_value, &lv_font_montserrat_26, 0);
+    lv_obj_set_style_text_font(d->label_value, &lv_font_montserrat_48, 0);
     lv_label_set_text(d->label_value, "0");
-    lv_obj_align(d->label_value, LV_ALIGN_CENTER, 0, 70);
+    lv_obj_align(d->label_value, LV_ALIGN_CENTER, 0, 0);
 
     d->label_unit = lv_label_create(d->edit_scr);
     lv_obj_set_style_text_color(d->label_unit, lv_color_hex(XK_COLOR_GRAY), 0);
     lv_obj_set_style_text_font(d->label_unit, &lv_font_msyh_16, 0);
     lv_label_set_text(d->label_unit, "%");
-    lv_obj_align(d->label_unit, LV_ALIGN_CENTER, 0, 110);
+    lv_obj_align(d->label_unit, LV_ALIGN_CENTER, 0, 58);
 
     lv_obj_t *hint = lv_label_create(d->edit_scr);
     lv_obj_set_style_text_color(hint, lv_color_hex(XK_COLOR_FAINT), 0);
