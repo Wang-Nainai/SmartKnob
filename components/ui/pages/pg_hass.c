@@ -239,17 +239,18 @@ static void hass_timer_cb(lv_timer_t *t)
     hass_flush_pending(d);
 }
 
-/* 指示圆点按当前状态定位: 灯=开/关位, 空调温度=满环比例, 风速=四象限 */
+/* 指示圆点: 仅用于"纯位置指示"(灯开/关, 空调风速象限).
+ * 有填充弧的状态(空调温度)由弧本身指示, 不放点避免叠加冲突 */
 static void hass_update_dot(hass_data_t *d)
 {
-    if (d->focus == HASS_DEV_AC) {
-        if (d->ac_mode == 0) {
-            hass_dot_at(d, (d->ac_temp - 16) * 360 / 14);
-        } else {
-            hass_dot_at(d, d->ac_fan * 90);
-        }
-    } else {
+    if (d->focus != HASS_DEV_AC) {
         hass_dot_at(d, d->dev_on[d->focus] ? 300 : 240);
+        lv_obj_clear_flag(d->dot, LV_OBJ_FLAG_HIDDEN);
+    } else if (d->ac_mode == 1) {
+        hass_dot_at(d, d->ac_fan * 90);
+        lv_obj_clear_flag(d->dot, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(d->dot, LV_OBJ_FLAG_HIDDEN);
     }
 }
 

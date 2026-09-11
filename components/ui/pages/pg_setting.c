@@ -56,7 +56,6 @@ typedef struct {
     lv_obj_t *edit_scr;
     lv_obj_t *dial;         /* 填充弧 (值比例) */
     lv_obj_t *bezel;        /* 外围刻度圈 */
-    lv_obj_t *dot;          /* 主题蓝指示圆点 */
     lv_obj_t *label_value;
     lv_obj_t *label_unit;
     lv_timer_t *timer;
@@ -219,7 +218,7 @@ static void setting_refresh_vals(setting_data_t *d)
     setting_set_val(d, SET_BLE, "");
 }
 
-/* 编辑视图表盘刷新: 大值/单位/填充弧/圆点 联动 */
+/* 编辑视图表盘刷新: 大值/单位/填充弧 联动 (填充弧即指示, 无圆点) */
 static void setting_edit_visual(setting_data_t *d)
 {
     int32_t val;
@@ -252,14 +251,6 @@ static void setting_edit_visual(setting_data_t *d)
     int deg = (int)(((int64_t)(val - vmin) * 360) / (vmax - vmin));
     if (deg > 360) deg = 360;
     lv_arc_set_angles(d->dial, 0, deg);
-    if (deg > 0) {
-        lv_obj_clear_flag(d->dot, LV_OBJ_FLAG_HIDDEN);
-        float rad = (float)deg * 0.01745329f;
-        lv_obj_set_pos(d->dot, 120 + (int32_t)(96.0f * sinf(rad)) - 6,
-                              168 - (int32_t)(96.0f * cosf(rad)) - 6);
-    } else {
-        lv_obj_add_flag(d->dot, LV_OBJ_FLAG_HIDDEN);
-    }
 }
 
 static void setting_show_edit(setting_data_t *d, int item)
@@ -540,15 +531,6 @@ static void pg_setting_create(page_t *p)
     lv_obj_set_style_border_color(inner, lv_color_hex(0x232327), 0);
     lv_obj_set_style_border_width(inner, 1, 0);
     lv_obj_clear_flag(inner, LV_OBJ_FLAG_CLICKABLE);
-
-    /* 主题蓝指示圆点 (最后创建置顶) */
-    d->dot = lv_obj_create(d->edit_scr);
-    lv_obj_remove_style_all(d->dot);
-    lv_obj_set_size(d->dot, 12, 12);
-    lv_obj_set_style_bg_color(d->dot, lv_color_hex(XK_COLOR_ACCENT), 0);
-    lv_obj_set_style_bg_opa(d->dot, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(d->dot, LV_RADIUS_CIRCLE, 0);
-    lv_obj_clear_flag(d->dot, LV_OBJ_FLAG_CLICKABLE);
 
     d->label_value = lv_label_create(d->edit_scr);
     lv_obj_set_style_text_color(d->label_value, lv_color_hex(XK_COLOR_TEXT), 0);
