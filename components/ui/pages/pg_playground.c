@@ -45,6 +45,14 @@ static void pg_apply_mode(pg_data_t *d)
         lv_arc_set_bg_angles(d->range_arc, 240, 300);
         break;
     }
+    case MOTOR_MODE_ADJUSTER: {
+        d->win_min = 0;
+        d->win_max = 14;
+        d->win_deg0 = 12;   /* 0 档在 12°, 每档 24°(物理角), 14 档到 348° */
+        d->win_span = 336;
+        lv_arc_set_bg_angles(d->range_arc, 12, 348);
+        break;
+    }
     case MOTOR_MODE_UNBOUND_NO_DETENTS:
     case MOTOR_MODE_MULTI_TURN_NO_DETENTS:
     case MOTOR_MODE_UNBOUNDED_DETENTS:

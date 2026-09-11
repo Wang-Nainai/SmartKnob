@@ -23,6 +23,7 @@ bool mqtt_ha_is_connected(void) { return false; }
 bool mqtt_ha_is_configured(void) { return false; }
 void mqtt_ha_publish_cmd(const char *device, const char *cmd) { (void)device; (void)cmd; }
 void mqtt_ha_publish_action(int dev_idx, const char *act) { (void)dev_idx; (void)act; }
+void mqtt_ha_publish_level(const char *key, int value) { (void)key; (void)value; }
 #else
 
 static esp_mqtt_client_handle_t s_client = NULL;
@@ -61,7 +62,7 @@ static const ha_trig_t ha_trigs[] = {
     {0, "on"}, {0, "off"},
     {1, "on"}, {1, "off"},
     {2, "on"}, {2, "off"},
-    {3, "on"}, {3, "off"}, {3, "temp_up"}, {3, "temp_down"}, {3, "fan_up"}, {3, "fan_down"},
+    {3, "on"}, {3, "off"},
 };
 #define HA_TRIG_NUM (sizeof(ha_trigs) / sizeof(ha_trigs[0]))
 
@@ -364,6 +365,26 @@ void mqtt_ha_publish_action(int dev_idx, const char *act)
     if (s_connected && s_client) {
         esp_mqtt_client_publish(s_client, "smartknob/action", payload, 0, 1, 0);
         ESP_LOGI(TAG, "action: %s", payload);
+    }
+    xSemaphoreGive(s_client_mux);
+}
+
+/* 绝对量值通道: smartknob/level/<key>, payload = 整数值.
+ * 旋转类调节(温度/风速)用它: 结算后只发一条终值, 惯性滑过若干档
+ * 也不会触发多次 HA 动作 */
+void mqtt_ha_publish_level(const char *key, int value)
+{
+    if (!s_connected || !s_client_mux || !key) {
+        return;
+    }
+    char topic[64];
+    char payload[16];
+    snprintf(topic, sizeof(topic), "smartknob/level/%s", key);
+    snprintf(payload, sizeof(payload), "%d", value);
+    xSemaphoreTake(s_client_mux, portMAX_DELAY);
+    if (s_connected && s_client) {
+        esp_mqtt_client_publish(s_client, topic, payload, strlen(payload), 1, 0);
+        ESP_LOGI(TAG, "level: %s = %s", topic, payload);
     }
     xSemaphoreGive(s_client_mux);
 }

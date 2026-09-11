@@ -73,6 +73,10 @@ typedef struct {
     int ac_temp;            /* 空调本地模拟温度 16..30 */
     int ac_fan;             /* 空调风速 0自动 1低 2中 3高 */
     int ac_mode;            /* 空调调节模式 0=温度 1=风速 */
+    lv_timer_t *timer;      /* 结算发布: 旋转停止 250ms 后发一次绝对值 */
+    uint32_t last_move_tick;
+    int last_pub_temp;      /* 上次已发布的值(去重) */
+    int last_pub_fan;
 } hass_data_t;
 
 static hass_data_t *s_hass;   /* 行回调取实例用 (单实例页面) */
@@ -200,10 +204,39 @@ static void hass_dot_at(hass_data_t *d, int deg)
 static void hass_ac_motor_mode(hass_data_t *d)
 {
     if (d->ac_mode == 0) {
-        motor_set_mode_range(MOTOR_MODE_COARSE_STRONG_DETENTS, 0, 14, d->ac_temp - 16);
+        motor_set_mode_range(MOTOR_MODE_ADJUSTER, 0, 14, d->ac_temp - 16);
     } else {
-        motor_set_mode_range(MOTOR_MODE_COARSE_STRONG_DETENTS, 0, 3, d->ac_fan);
+        motor_set_mode_range(MOTOR_MODE_ADJUSTER, 0, 3, d->ac_fan);
     }
+}
+
+/* 结算发布: 空调节值(温度/风速)在旋转静止 250ms 后发布一次绝对值,
+ * 惯性滑过若干档也只发终值, HA 不会收到一串中间值 */
+static void hass_flush_pending(hass_data_t *d)
+{
+    if (d->ac_mode == 0) {
+        if (d->ac_temp != d->last_pub_temp) {
+            mqtt_ha_publish_level("bedroom_ac_temp", d->ac_temp);
+            d->last_pub_temp = d->ac_temp;
+        }
+    } else {
+        if (d->ac_fan != d->last_pub_fan) {
+            mqtt_ha_publish_level("bedroom_ac_fan", d->ac_fan);
+            d->last_pub_fan = d->ac_fan;
+        }
+    }
+}
+
+static void hass_timer_cb(lv_timer_t *t)
+{
+    hass_data_t *d = lv_timer_get_user_data(t);
+    if (!d->in_control || d->focus != HASS_DEV_AC) {
+        return;
+    }
+    if ((uint32_t)(lv_tick_get() - d->last_move_tick) < 250) {
+        return;   /* 还在转 */
+    }
+    hass_flush_pending(d);
 }
 
 /* 指示圆点按当前状态定位: 灯=开/关位, 空调温度=满环比例, 风速=四象限 */
@@ -274,6 +307,7 @@ static void hass_show_control(hass_data_t *d, bool ctrl)
         }
     } else {
         lv_obj_add_flag(d->ctrl_scr, LV_OBJ_FLAG_HIDDEN);
+        hass_flush_pending(d);   /* 退出控制视图前把未结算的值发出去 */
         motor_set_mode(MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
     }
 }
@@ -340,6 +374,7 @@ static void hass_icon_cb(lv_event_t *e)
         return;
     }
     if (d->focus == HASS_DEV_AC) {
+        hass_flush_pending(d);   /* 切模式前把未结算的值发出去 */
         d->ac_mode ^= 1;
         hass_ctrl_visual(d);
         hass_ac_motor_mode(d);   /* 模式切换后电机档位跟着换 */
@@ -542,7 +577,11 @@ static void pg_hass_create(page_t *p)
     d->ac_temp = 26;
     d->ac_fan = 0;
     d->ac_mode = 0;
+    d->last_pub_temp = 26;
+    d->last_pub_fan = 0;
+    d->last_move_tick = 0;
     hass_ctrl_visual(d);
+    d->timer = lv_timer_create(hass_timer_cb, 50, d);
 
     motor_set_mode(MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
     hass_set_focus(d, 0, 0);
@@ -553,6 +592,7 @@ static void pg_hass_destroy(page_t *p)
     s_hass = NULL;
     hass_data_t *d = p->data;
     if (d) {
+        if (d->timer) lv_timer_del(d->timer);
         free(d);
     }
     p->data = NULL;
@@ -563,22 +603,20 @@ static void pg_hass_on_rotate(page_t *p, int32_t steps)
     hass_data_t *d = p->data;
     if (d->in_control) {
         if (d->focus == HASS_DEV_AC) {
-            /* 空调: 电机档位即值, 边沿触发发布(只在变化时发, 不洪泛) */
+            /* 空调: 电机档位即值, 界面实时跟随; MQTT 由 timer 结算后发布终值 */
             int32_t pos = motor_get_position();
             if (d->ac_mode == 0) {
                 int t = 16 + pos;
                 if (t != d->ac_temp) {
-                    mqtt_ha_publish_action(d->focus, t > d->ac_temp ? "temp_up" : "temp_down");
                     d->ac_temp = t;
                     hass_ctrl_visual(d);
-                    pm_shake();
+                    d->last_move_tick = lv_tick_get();
                 }
             } else {
                 if (pos != d->ac_fan) {
-                    mqtt_ha_publish_action(d->focus, pos > d->ac_fan ? "fan_up" : "fan_down");
                     d->ac_fan = pos;
                     hass_ctrl_visual(d);
-                    pm_shake();
+                    d->last_move_tick = lv_tick_get();
                 }
             }
         } else {

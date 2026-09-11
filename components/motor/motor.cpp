@@ -187,6 +187,14 @@ static const knob_config_t knob_configs[MOTOR_MODE_COUNT] = {
         .snap_point = 1.1, .snap_point_bias = 0,
         .detent_positions_count = 0, .detent_positions = {0}, .text = "无边界棘轮",
     },
+    [MOTOR_MODE_ADJUSTER] = {
+        .position = 0,
+        .min_position = 0, .max_position = 14,
+        .position_width_radians = (360.0f / 14) * _PI / 180,  /* 一整圈正好 14 档 */
+        .detent_strength_unit = 2, .endstop_strength_unit = 1,
+        .snap_point = 1.1, .snap_point_bias = 0,
+        .detent_positions_count = 0, .detent_positions = {0}, .text = "\xE8\xB0\x83\xE8\x8A\x82\xE6\xA8\xA1\xE5\xBC\x8F", /* 调节模式 */
+    },
 };
 
 /* ---------------- 控制状态（仅 motor_task 写，跨任务只读快照） ---------------- */
