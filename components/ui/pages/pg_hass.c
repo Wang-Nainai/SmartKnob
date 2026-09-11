@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include "page_mgr.h"
 #include "motor.h"
 #include "mqtt.h"
@@ -51,7 +52,8 @@ typedef struct {
     lv_obj_t *icons[ROWS_N];
     lv_obj_t *infos[ROWS_N];
     lv_obj_t *ctrl_scr;     /* 控制视图 */
-    lv_obj_t *dial;         /* 圆环: 暗色轨道 + 16° 旋转指示弧 */
+    lv_obj_t *dial;         /* 圆环: 暗色轨道 */
+    lv_obj_t *dot;          /* 旋转指示圆点 (主题深蓝, 绕环移动) */
     lv_obj_t *bezel;        /* 外围细刻度圈 (X-Knob 语言) */
     lv_obj_t *icon_circle;  /* 中央图标圆底 */
     lv_obj_t *icon;         /* 设备图标 */
@@ -173,14 +175,18 @@ static void hass_scroll_wrap_cb(lv_event_t *e)
     }
 }
 
-/* 指示弧绕环移动: 每档 5°, 弧段 16° 带圆头, 0 = 12点方向 */
+/* 指示圆点绕环移动: 每档 5°, 0 = 12点方向, 顺时针为正.
+ * 点骑在圆环轨道正中 (轨道带 r=90..102, 中线 96) */
 static void hass_indic_update(hass_data_t *d)
 {
     int32_t deg = ((d->dot_deg % 360) + 360) % 360;
-    lv_arc_set_angles(d->dial, (deg + 360 - 16) % 360, deg);
+    float rad = (float)deg * 0.01745329f;
+    int32_t x = 120 + (int32_t)(96.0f * sinf(rad)) - 6;
+    int32_t y = 168 - (int32_t)(96.0f * cosf(rad)) - 6;
+    lv_obj_set_pos(d->dot, x, y);
 }
 
-/* 控制视图状态刷新: 状态字/图标圆底/指示弧颜色随 开关状态 联动 */
+/* 控制视图状态刷新: 状态字/图标圆底随 开关状态 联动 */
 static void hass_ctrl_visual(hass_data_t *d)
 {
     bool on = d->dev_on[d->focus];
@@ -191,8 +197,6 @@ static void hass_ctrl_visual(hass_data_t *d)
     lv_obj_set_style_text_color(d->label_state, lv_color_hex(on ? XK_COLOR_TEXT : XK_COLOR_GRAY), 0);
     lv_obj_set_style_bg_color(d->icon_circle, lv_color_hex(on ? XK_COLOR_ACCENT : 0x1C1C1E), 0);
     lv_obj_set_style_text_color(d->icon, lv_color_hex(on ? XK_COLOR_TEXT : 0x8E8E93), 0);
-    lv_obj_set_style_arc_color(d->dial, lv_color_hex(on ? XK_COLOR_ACCENT : 0x48484A), LV_PART_INDICATOR);
-    hass_indic_update(d);
 }
 
 static void hass_show_control(hass_data_t *d, bool ctrl)
@@ -337,7 +341,7 @@ static void pg_hass_create(page_t *p)
     lv_obj_set_user_data(d->ctrl_scr, p);
     lv_obj_add_flag(d->ctrl_scr, LV_OBJ_FLAG_HIDDEN);
 
-    /* 圆环: 全周暗色轨道(圆头) + 16° 旋转指示弧, 无刻度无指针 */
+    /* 圆环: 全周暗色轨道(圆头), 指示由独立圆点承担 */
     lv_obj_t *dial = lv_arc_create(d->ctrl_scr);
     d->dial = dial;
     lv_obj_set_size(dial, 204, 204);
@@ -347,13 +351,21 @@ static void pg_hass_create(page_t *p)
     lv_arc_set_range(dial, 0, 100);
     lv_arc_set_value(dial, 0);
     lv_obj_remove_style(dial, NULL, LV_PART_KNOB);
+    lv_obj_set_style_arc_width(dial, 0, LV_PART_INDICATOR);
     lv_obj_set_style_arc_width(dial, 12, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(dial, 12, LV_PART_INDICATOR);
     lv_obj_set_style_arc_rounded(dial, true, LV_PART_MAIN);
-    lv_obj_set_style_arc_rounded(dial, true, LV_PART_INDICATOR);
     lv_obj_set_style_arc_color(dial, lv_color_hex(0x1C1C1E), LV_PART_MAIN);
-    lv_obj_set_style_arc_color(dial, lv_color_hex(0x48484A), LV_PART_INDICATOR);
     lv_obj_remove_flag(dial, LV_OBJ_FLAG_CLICKABLE);
+
+    /* 旋转指示圆点: 主题深蓝, 骑在轨道中线上 (最后创建置顶) */
+    lv_obj_t *dot = lv_obj_create(d->ctrl_scr);
+    d->dot = dot;
+    lv_obj_remove_style_all(dot);
+    lv_obj_set_size(dot, 12, 12);
+    lv_obj_set_style_bg_color(dot, lv_color_hex(XK_COLOR_ACCENT), 0);
+    lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_clear_flag(dot, LV_OBJ_FLAG_CLICKABLE);
 
     /* 外围刻度圈: 73 根细刻度(每6根一根长亮), 与圆环同心, 当"表圈"用 */
     lv_obj_t *bezel = lv_scale_create(d->ctrl_scr);
