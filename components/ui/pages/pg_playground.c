@@ -27,6 +27,8 @@ typedef struct {
 #define WIN_DEG0_BOUND 200
 #define WIN_SPAN_BOUND 140
 
+static void pg_refresh_fill(pg_data_t *d, int32_t pos);
+
 static void pg_apply_mode(pg_data_t *d)
 {
     int m = d->mode;
@@ -43,7 +45,6 @@ static void pg_apply_mode(pg_data_t *d)
         d->win_deg0 = 240;
         d->win_span = 60;
         lv_arc_set_bg_angles(d->range_arc, 240, 300);
-        lv_arc_set_range(d->range_arc, 0, 1);
         break;
     }
     case MOTOR_MODE_ADJUSTER: {
@@ -52,7 +53,6 @@ static void pg_apply_mode(pg_data_t *d)
         d->win_deg0 = 12;   /* 0 档在 12°, 每档 24°(物理角), 14 档到 348° */
         d->win_span = 336;
         lv_arc_set_bg_angles(d->range_arc, 12, 348);
-        lv_arc_set_range(d->range_arc, 0, 14);
         break;
     }
     case MOTOR_MODE_UNBOUND_NO_DETENTS:
@@ -78,10 +78,12 @@ static void pg_apply_mode(pg_data_t *d)
         d->win_span = WIN_SPAN_BOUND;
         lv_arc_set_bg_angles(d->range_arc, WIN_DEG0_BOUND,
                              WIN_DEG0_BOUND + WIN_SPAN_BOUND);
-        lv_arc_set_range(d->range_arc, 0, max - min);
         break;
     }
     }
+
+    /* 切模式瞬间按新窗口清场刷新, 不等 timer, 不留旧模式残影 */
+    pg_refresh_fill(d, 0);
 
     motor_set_mode(m, 0, 0);
 }
@@ -95,25 +97,32 @@ static void pg_dot_set(pg_data_t *d, int deg)
                           168 - (int32_t)(96.0f * cosf(rad)) - 6);
 }
 
+/* 有界模式填充刷新: 直接设置弧角度(无内建动画).
+ * 窗口弧 main=背景, indicator 从窗口起点长到当前值位置, 一体指示 */
+static void pg_refresh_fill(pg_data_t *d, int32_t pos)
+{
+    if (d->win_span == 360) {
+        /* 无界: 圆点绕全周 (纯位置指示, 无窗口无填充) */
+        lv_obj_clear_flag(d->dot, LV_OBJ_FLAG_HIDDEN);
+        pg_dot_set(d, (int32_t)(pos % 72) * 5);
+        return;
+    }
+    lv_obj_add_flag(d->dot, LV_OBJ_FLAG_HIDDEN);
+    int32_t v = pos - d->win_min;
+    if (v < 0) v = 0;
+    int32_t vmax = d->win_max - d->win_min;
+    if (v > vmax) v = vmax;
+    int32_t end = d->win_deg0 + (int32_t)(((int64_t)v * d->win_span) / vmax);
+    lv_arc_set_angles(d->range_arc, d->win_deg0, end);
+}
+
 static void pg_playground_timer(lv_timer_t *t)
 {
     pg_data_t *d = lv_timer_get_user_data(t);
     int32_t pos = motor_get_position();
     float off = motor_get_angle_offset_deg();
 
-    if (d->win_span == 360) {
-        /* 无界: 圆点绕全周 (纯位置指示, 无窗口无填充) */
-        lv_obj_clear_flag(d->dot, LV_OBJ_FLAG_HIDDEN);
-        pg_dot_set(d, (int32_t)(pos % 72) * 5);
-    } else {
-        /* 有界: 填充弧在同一根窗口弧里从窗口起点长出来 (窗口弧=背景) */
-        lv_obj_add_flag(d->dot, LV_OBJ_FLAG_HIDDEN);
-        int32_t v = pos - d->win_min;
-        if (v < 0) v = 0;
-        int32_t vmax = d->win_max - d->win_min;
-        if (v > vmax) v = vmax;
-        lv_arc_set_value(d->range_arc, v);
-    }
+    pg_refresh_fill(d, pos);
 
     char buf[24];
     snprintf(buf, sizeof(buf), "%ld", (long)pos);
