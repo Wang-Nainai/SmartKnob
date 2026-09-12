@@ -470,7 +470,8 @@ static void pg_hass_create(page_t *p)
     lv_obj_set_user_data(d->ctrl_scr, p);
     lv_obj_add_flag(d->ctrl_scr, LV_OBJ_FLAG_HIDDEN);
 
-    /* 圆环: 全周暗色轨道(圆头), 指示由独立圆点承担 */
+    /* 圆环: 全周暗色轨道(圆头) + 填充指示(宽度必须打开, 颜色随状态在
+     * hass_ctrl_visual 中设置; 圆点负责的位置指示见 hass_update_dot) */
     lv_obj_t *dial = lv_arc_create(d->ctrl_scr);
     d->dial = dial;
     lv_obj_set_size(dial, 204, 204);
@@ -480,10 +481,12 @@ static void pg_hass_create(page_t *p)
     lv_arc_set_range(dial, 0, 100);
     lv_arc_set_value(dial, 0);
     lv_obj_remove_style(dial, NULL, LV_PART_KNOB);
-    lv_obj_set_style_arc_width(dial, 0, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(dial, 12, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_rounded(dial, true, LV_PART_INDICATOR);
     lv_obj_set_style_arc_width(dial, 12, LV_PART_MAIN);
     lv_obj_set_style_arc_rounded(dial, true, LV_PART_MAIN);
     lv_obj_set_style_arc_color(dial, lv_color_hex(0x1C1C1E), LV_PART_MAIN);
+    lv_obj_set_style_arc_color(dial, lv_color_hex(XK_COLOR_ACCENT), LV_PART_INDICATOR);
     lv_obj_remove_flag(dial, LV_OBJ_FLAG_CLICKABLE);
 
     /* 旋转指示圆点: 主题深蓝, 骑在轨道中线上 (最后创建置顶) */
