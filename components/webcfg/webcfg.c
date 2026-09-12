@@ -11,6 +11,7 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "webcfg.h"
+#include "hass_cfg.h"
 #include "app_state.h"
 #include "env_hist.h"
 #include "motor.h"
@@ -212,6 +213,16 @@ static const char page_html[] =
     "<label>MQTT 用户名</label><input type=\"text\" name=\"mqtt_user\" id=\"mqtt_user\" maxlength=\"63\">"
     "<label>MQTT 密码</label><input type=\"password\" name=\"mqtt_pass\" id=\"mqtt_pass\" maxlength=\"63\">"
     "<button type=\"submit\">保存并重连</button></form></div>"
+    "<h2>智能家居设备 (最多 6 台)</h2>"
+    "<div class=\"card\">"
+    "<form method=\"post\" action=\"/save\" onsubmit=\"save(event)\">"
+    "<label>每行一台: 名称,灯 或 名称,空调</label>"
+    "<textarea name=\"hass_devices\" id=\"hass_devices\" rows=\"6\" "
+    "style=\"width:100%;padding:10px;border:1px solid #2a3140;border-radius:9px;"
+    "background:#0f1218;color:#f2f4f8;font-size:14px\" "
+    "placeholder=\"\\u5367\\u5ba4\\u706f,\\u706f\\n\\u5ba2\\u5385\\u706f,\\u706f\\n\\u5367\\u5ba4\\u7a7a\\u8c03,\\u7a7a\\u8c03\"></textarea>"
+    "<div class=\"tip\">名称限 6 个汉字; 保存后设备自动重发发现, HA 映射表按 dev1..devN 对应</div>"
+    "<button type=\"submit\">保存设备列表</button></form></div>"
     "<h2>固件升级 (OTA)</h2>"
     "<div class=\"card\">"
     "<input type=\"file\" id=\"fwfile\" accept=\".bin\" style=\"margin-bottom:10px\">"
@@ -247,6 +258,7 @@ static const char page_html[] =
     "document.getElementById('mqtt_uri').value=s.mqtt_uri||'';"
     "document.getElementById('mqtt_user').value=s.mqtt_user||'';"
     "document.getElementById('mqtt_pass').value=s.mqtt_pass||'';"
+    "document.getElementById('hass_devices').value=s.hass_devices||'';"
     "if(!document.getElementById('bri').value)document.getElementById('bri').value=s.brightness;"
     "if(!document.getElementById('tmo').value)document.getElementById('tmo').value=s.timeout;"
     "}).catch(()=>{})}"
@@ -335,6 +347,26 @@ static esp_err_t handler_status(httpd_req_t *req)
     webcfg_get_str("mqtt_uri", mqtt_uri, sizeof(mqtt_uri), "");
     webcfg_get_str("mqtt_user", mqtt_user, sizeof(mqtt_user), "");
     webcfg_get_str("mqtt_pass", mqtt_pass, sizeof(mqtt_pass), "");
+    char devcfg[192] = {0};
+    webcfg_get_str("hass_devices", devcfg, sizeof(devcfg), "");
+    /* JSON 字符串转义(\n -> \\n, " 与 \ 前加 \\), 设备行文本含换行 */
+    char devjson[256];
+    {
+        size_t o = 0;
+        for (size_t i = 0; devcfg[i] && o < sizeof(devjson) - 3; i++) {
+            unsigned char c = (unsigned char)devcfg[i];
+            if (c == '"' || c == '\\') {
+                devjson[o++] = '\\';
+                devjson[o++] = (char)c;
+            } else if (c == '\n') {
+                devjson[o++] = '\\';
+                devjson[o++] = 'n';
+            } else {
+                devjson[o++] = (char)c;
+            }
+        }
+        devjson[o] = 0;
+    }
     app_env_t env;
     app_state_get_env(&env);
 
@@ -350,6 +382,7 @@ static esp_err_t handler_status(httpd_req_t *req)
 
     int n = snprintf(buf, sizeof(buf),
                      "{\"ip\":\"%s\",\"ssid\":\"%s\",\"mqtt_uri\":\"%s\",\"mqtt_user\":\"%s\",\"mqtt_pass\":\"%s\","
+                     "\"hass_devices\":\"%s\","
                      "\"wifi\":%s,\"mqtt\":%s,\"ap\":%s,\"ap_ssid\":\"%s\",\"ap_ip\":\"%s\","
                      "\"ble\":%s,"
                      "\"co2\":%u,\"temp\":%.1f,\"rh\":%.1f,"
@@ -357,7 +390,7 @@ static esp_err_t handler_status(httpd_req_t *req)
                      "\"brightness\":%d,\"timeout\":%d,"
                      "\"heap\":%u,\"rssi\":%d,"
                      "\"version\":\"%s\",\"uptime\":\"%ud %02uh %02um\"}",
-                     s_ip, ssid, mqtt_uri, mqtt_user, mqtt_pass,
+                     s_ip, ssid, mqtt_uri, mqtt_user, mqtt_pass, devjson,
                      app_state_get_wifi() ? "true" : "false",
                      s_mqtt ? "true" : "false",
                      ap ? "true" : "false",
@@ -539,7 +572,7 @@ static esp_err_t handler_save(httpd_req_t *req)
     url_decode(body, decoded, sizeof(decoded));
 
     /* copy value up to '&' separator */
-    char val[128];
+    char val[256];
     const char *p;
 
 #define GET_FIELD(field, key, offset) do { \
@@ -560,7 +593,20 @@ static esp_err_t handler_save(httpd_req_t *req)
     GET_FIELD("mqtt_uri=", "mqtt_uri", 9);
     GET_FIELD("mqtt_user=", "mqtt_user", 10);
     GET_FIELD("mqtt_pass=", "mqtt_pass", 10);
+    GET_FIELD("hass_devices=", "hass_devices", 13);
 #undef GET_FIELD
+
+    /* 智能家居设备列表: 有提交才写, 非法行被 hass_cfg 拒绝时保留旧配置 */
+    p = strstr(decoded, "hass_devices=");
+    if (p) {
+        const char *v = p + 13;
+        const char *end = strchr(v, '&');
+        size_t n = end ? (size_t)(end - v) : strlen(v);
+        if (n >= sizeof(val)) n = sizeof(val) - 1;
+        memcpy(val, v, n);
+        val[n] = 0;
+        hass_cfg_save(val);
+    }
 
     httpd_resp_sendstr(req, "配置已保存，正在重连...");
     ESP_LOGI(TAG, "config saved, applying");

@@ -5,6 +5,7 @@
 #include "mqtt_client.h"
 #include "esp_log.h"
 #include "mqtt.h"
+#include "hass_cfg.h"
 #include "webcfg.h"
 #include "led.h"
 #include "motor.h"
@@ -42,43 +43,48 @@ static volatile uint8_t s_has_data = 0;
 #define MQTT_TOPIC_TEMP    "homeassistant/sensor/" MQTT_DEVICE "_temp/config"
 #define MQTT_TOPIC_RH      "homeassistant/sensor/" MQTT_DEVICE "_humidity/config"
 
-#define MQTT_DEV_NUM 4
+/* 设备槽位键 dev1..devN (按配置序号, 与具体设备无关, HA 侧映射表按序写) */
+#define MQTT_DEV_NUM HASS_MAX_DEVICES
 
 /* ---------------- HA 设备自动化触发器 (旋钮 → HA 任意设备) ----------------
- * 真实设备槽位: 3 盏灯(开关/亮度步进) + 卧室空调(开关/温度/风速).
- * 触发消息: smartknob/action  payload = <dev>_<act> (如 bedroom_light_on)
- * HA 侧用单条 YAML 自动化按 payload 映射到真实实体 */
+ * 设备列表来自 Web 配置(hass_cfg), 触发器按 dev1..devN 动态生成:
+ *   smartknob/action payload = devN_on / devN_off (边沿事件)
+ *   smartknob/level/devN_temp / devN_fan (绝对值, 结算发布)
+ * HA 侧用一条 YAML 自动化把 devN 映射到真实实体 */
 
-static const char *ha_dev_keys[MQTT_DEV_NUM] = {
-    "bedroom_light", "living_light", "hall_light", "bedroom_ac",
+static hass_device_cfg_t s_dev_cfg[MQTT_DEV_NUM];
+static int s_dev_num = 0;
+
+/* 历史遗留触发器(占位时代 + 真实设备 v1), 连接时发空保留载荷让 HA 清除 */
+static const char *s_legacy_trigs[] = {
+    "light_on", "light_off", "light_left", "light_right",
+    "ac_on", "ac_off", "ac_left", "ac_right",
+    "fan_on", "fan_off", "fan_left", "fan_right",
+    "washer_on", "washer_off", "washer_left", "washer_right",
+    "bedroom_light_on", "bedroom_light_off", "bedroom_light_bright_up",
+    "bedroom_light_bright_down",
+    "living_light_on", "living_light_off", "living_light_bright_up",
+    "living_light_bright_down",
+    "hall_light_on", "hall_light_off", "hall_light_bright_up",
+    "hall_light_bright_down",
+    "bedroom_ac_on", "bedroom_ac_off", "bedroom_ac_temp_up",
+    "bedroom_ac_temp_down", "bedroom_ac_fan_up", "bedroom_ac_fan_down",
 };
+#define LEGACY_TRIG_NUM (sizeof(s_legacy_trigs) / sizeof(s_legacy_trigs[0]))
 
-typedef struct {
-    uint8_t dev;
-    const char *act;
-} ha_trig_t;
-
-static const ha_trig_t ha_trigs[] = {
-    {0, "on"}, {0, "off"},
-    {1, "on"}, {1, "off"},
-    {2, "on"}, {2, "off"},
-    {3, "on"}, {3, "off"},
-};
-#define HA_TRIG_NUM (sizeof(ha_trigs) / sizeof(ha_trigs[0]))
-
-static void publish_trigger_one(esp_mqtt_client_handle_t client, int t)
+static void publish_trigger_one(esp_mqtt_client_handle_t client, int dev, const char *act)
 {
     char topic[160];
     char payload[320];
     snprintf(topic, sizeof(topic),
-             "homeassistant/device_automation/" MQTT_DEVICE "/%s_%s/config",
-             ha_dev_keys[ha_trigs[t].dev], ha_trigs[t].act);
+             "homeassistant/device_automation/" MQTT_DEVICE "/dev%d_%s/config",
+             dev + 1, act);
     snprintf(payload, sizeof(payload),
              "{\"automation_type\":\"trigger\",\"topic\":\"smartknob/action\","
-             "\"payload\":\"%s_%s\",\"type\":\"action\",\"subtype\":\"button_%d\","
+             "\"payload\":\"dev%d_%s\",\"type\":\"action\",\"subtype\":\"button_%d\","
              "\"device\":{\"identifiers\":[\"" MQTT_DEVICE "\"],\"name\":\"SmartKnob\","
              "\"manufacturer\":\"DIY\",\"model\":\"SmartKnob\"}}",
-             ha_dev_keys[ha_trigs[t].dev], ha_trigs[t].act, t + 1);
+             dev + 1, act, dev * 2 + (strcmp(act, "on") == 0 ? 1 : 2));
     esp_mqtt_client_publish(client, topic, payload, 0, 1, 1);
 }
 
@@ -113,8 +119,9 @@ static void publish_discovery(esp_mqtt_client_handle_t client)
     esp_mqtt_client_publish(client, MQTT_TOPIC_RH, payload, len, 1, 1);
 }
 
-/* 16 条触发器发现错开发送: BLE 广播抢占空口时连发 19 条会写超时掉线,
- * 改为每 400ms 发 1 条(esp_timer 回调仅入队, 非阻塞) */
+/* 发现消息错开发送: BLE 广播抢占空口时连发会写超时掉线,
+ * 改为每 400ms 发 1 条(esp_timer 回调仅入队, 非阻塞).
+ * 顺序: 先发旧触发器清理(空保留载荷), 再发当前设备触发器 */
 static esp_timer_handle_t s_disc_timer = NULL;
 static int s_disc_i = 0;
 
@@ -123,8 +130,19 @@ static void disc_timer_cb(void *arg)
     if (!s_connected || !s_client) {
         return;
     }
-    if (s_disc_i < (int)HA_TRIG_NUM) {
-        publish_trigger_one(s_client, s_disc_i);
+    if (s_disc_i < (int)LEGACY_TRIG_NUM) {
+        /* 清理历史遗留触发器 */
+        char topic[160];
+        snprintf(topic, sizeof(topic),
+                 "homeassistant/device_automation/" MQTT_DEVICE "/%s/config",
+                 s_legacy_trigs[s_disc_i]);
+        esp_mqtt_client_publish(s_client, topic, "", 0, 1, 1);
+        s_disc_i++;
+        return;
+    }
+    int trig_i = s_disc_i - (int)LEGACY_TRIG_NUM;
+    if (s_dev_num > 0 && trig_i < s_dev_num * 2) {
+        publish_trigger_one(s_client, trig_i / 2, (trig_i % 2) ? "off" : "on");
         s_disc_i++;
     } else {
         esp_timer_stop(s_disc_timer);
@@ -181,23 +199,6 @@ static void publish_state(esp_mqtt_client_handle_t client)
     esp_mqtt_client_publish(client, MQTT_TOPIC_STATE, payload, n, 1, 0);
 }
 
-/* 旧版占位触发器(light/ac/fan/washer x on/off/left/right)的发现消息是
- * retained 的, 换真实设备后发空保留载荷让 HA 清掉它们 */
-static void publish_legacy_cleanup(esp_mqtt_client_handle_t client)
-{
-    static const char *old_devs[4] = {"light", "ac", "fan", "washer"};
-    static const char *old_acts[4] = {"on", "off", "left", "right"};
-    for (int d = 0; d < 4; d++) {
-        for (int a = 0; a < 4; a++) {
-            char topic[128];
-            snprintf(topic, sizeof(topic),
-                     "homeassistant/device_automation/" MQTT_DEVICE "/%s_%s/config",
-                     old_devs[d], old_acts[a]);
-            esp_mqtt_client_publish(client, topic, "", 0, 1, 1);
-        }
-    }
-}
-
 static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data)
 {
     esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)event_data;
@@ -210,9 +211,11 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         webcfg_set_mqtt_connected(true);
         led_set_color(0, 255, 255);   /* 青: WiFi+MQTT 就绪 */
         publish_discovery(client);            /* 3 条传感器发现 */
-        publish_legacy_cleanup(client);       /* 清掉旧占位触发器的 retained 消息 */
         esp_mqtt_client_subscribe(client, "smartknob/cmnd/#", 1);
-        /* 16 条触发器发现逐条错开发送(400ms/条), 防止 BLE 抢空口时写超时 */
+        /* 设备列表实时读配置(保存设备后 webcfg 会触发重连, 即刻生效) */
+        s_dev_num = hass_cfg_load(s_dev_cfg, MQTT_DEV_NUM);
+        ESP_LOGI(TAG, "hass devices: %d", s_dev_num);
+        /* 发现消息逐条错开发送(400ms/条), 防止 BLE 抢空口时写超时 */
         if (!s_disc_timer) {
             const esp_timer_create_args_t targs = {
                 .callback = disc_timer_cb, .name = "ha_disc",
@@ -351,16 +354,16 @@ void mqtt_ha_publish_cmd(const char *device, const char *cmd)
     xSemaphoreGive(s_client_mux);
 }
 
-/* HA 设备自动化动作: dev_idx(0-3) + act("on"/"off"/"bright_up"/"temp_up"/...)
- * 发布 smartknob/action, payload = <dev>_<act>, HA 触发器捕获后
- * 在自动化里绑定到真实实体 —— 旋钮直接控制 HA 设备的标准通道 */
+/* HA 设备自动化动作: dev_idx(0..N-1, 对应 Web 配置的设备槽位)
+ * + act("on"/"off") 发布 smartknob/action, payload = devN_<act>,
+ * HA 触发器捕获后在自动化里绑定到真实实体 */
 void mqtt_ha_publish_action(int dev_idx, const char *act)
 {
     if (!s_connected || !s_client_mux || dev_idx < 0 || dev_idx >= MQTT_DEV_NUM || !act) {
         return;
     }
-    char payload[40];
-    snprintf(payload, sizeof(payload), "%s_%s", ha_dev_keys[dev_idx], act);
+    char payload[24];
+    snprintf(payload, sizeof(payload), "dev%d_%s", dev_idx + 1, act);
     xSemaphoreTake(s_client_mux, portMAX_DELAY);
     if (s_connected && s_client) {
         esp_mqtt_client_publish(s_client, "smartknob/action", payload, 0, 1, 0);

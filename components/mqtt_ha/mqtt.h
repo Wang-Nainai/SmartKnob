@@ -15,10 +15,9 @@ bool mqtt_ha_is_connected(void);
 bool mqtt_ha_is_configured(void);
 /* Publish a HASS control command (X-Knob style): <topic>/HOME/<device> with payload cmd */
 void mqtt_ha_publish_cmd(const char *device, const char *cmd);
-/* HA 设备自动化动作: dev_idx 0-3, act 为小写动作名
- * ("on"/"off"/"bright_up"/"bright_down"/"temp_up"/"temp_down"/"fan_up"/"fan_down")
- * 发布 smartknob/action, payload = <dev>_<act>, HA 触发器可视化绑定任意实体 */
+/* HA 设备自动化动作: dev_idx 0..N-1 对应 Web 配置的设备槽位(键 dev1..devN),
+ * act 为小写动作名("on"/"off"); 发布 smartknob/action, HA 触发器绑定实体 */
 void mqtt_ha_publish_action(int dev_idx, const char *act);
 /* 绝对量值通道: 发布 smartknob/level/<key>, payload = 整数值
- * (旋转类调节结算后的终值, 如 bedroom_ac_temp=26) */
+ * (旋转类调节结算后的终值, 如 dev4_temp=26) */
 void mqtt_ha_publish_level(const char *key, int value);
