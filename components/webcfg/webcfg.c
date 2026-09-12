@@ -349,6 +349,22 @@ static esp_err_t handler_status(httpd_req_t *req)
     webcfg_get_str("mqtt_pass", mqtt_pass, sizeof(mqtt_pass), "");
     char devcfg[192] = {0};
     webcfg_get_str("hass_devices", devcfg, sizeof(devcfg), "");
+    if (!devcfg[0]) {
+        /* 空配置预填默认 4 台, 避免表单空白让人以为未配置 */
+        hass_device_cfg_t tmp[HASS_MAX_DEVICES];
+        int dn = hass_cfg_load(tmp, HASS_MAX_DEVICES);
+        size_t o = 0;
+        for (int i = 0; i < dn && o < sizeof(devcfg) - 10; i++) {
+            int nw = snprintf(devcfg + o, sizeof(devcfg) - o, "%s,%s\n",
+                              tmp[i].name,
+                              tmp[i].type == HASS_TYPE_AC ?
+                              "\xE7\xA9\xBA\xE8\xB0\x83" : "\xE7\x81\xAF");
+            if (nw < 0 || (size_t)nw >= sizeof(devcfg) - o) {
+                break;
+            }
+            o += nw;
+        }
+    }
     /* JSON 字符串转义(\n -> \\n, " 与 \ 前加 \\), 设备行文本含换行 */
     char devjson[256];
     {
@@ -593,10 +609,10 @@ static esp_err_t handler_save(httpd_req_t *req)
     GET_FIELD("mqtt_uri=", "mqtt_uri", 9);
     GET_FIELD("mqtt_user=", "mqtt_user", 10);
     GET_FIELD("mqtt_pass=", "mqtt_pass", 10);
-    GET_FIELD("hass_devices=", "hass_devices", 13);
 #undef GET_FIELD
 
-    /* 智能家居设备列表: 有提交才写, 非法行被 hass_cfg 拒绝时保留旧配置 */
+    /* 智能家居设备列表: 有提交才处理, hass_cfg_save 校验后规范化写入
+     * (非法行被拒绝时保留旧配置, 不写原始文本) */
     p = strstr(decoded, "hass_devices=");
     if (p) {
         const char *v = p + 13;

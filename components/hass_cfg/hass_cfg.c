@@ -20,10 +20,20 @@ static const hass_device_cfg_t s_defaults[HASS_MAX_DEVICES] = {
 static uint8_t parse_type(const char *t)
 {
     while (*t == ' ' || *t == '\t') t++;
-    if (!strcmp(t, "\xE7\x81\xAF") || !strcmp(t, "light")) {          /* 灯 */
+    size_t len = strlen(t);
+    while (len > 0 && (t[len - 1] == ' ' || t[len - 1] == '\t')) {
+        len--;
+    }
+    if (len == 3 && !strncmp(t, "\xE7\x81\xAF", 3)) {               /* 灯 */
         return HASS_TYPE_LIGHT;
     }
-    if (!strcmp(t, "\xE7\xA9\xBA\xE8\xB0\x83") || !strcmp(t, "ac")) { /* 空调 */
+    if (len == 6 && !strncmp(t, "\xE7\xA9\xBA\xE8\xB0\x83", 6)) {   /* 空调 */
+        return HASS_TYPE_AC;
+    }
+    if (len == 5 && !strcmp(t, "light")) {
+        return HASS_TYPE_LIGHT;
+    }
+    if (len == 2 && !strcmp(t, "ac")) {
         return HASS_TYPE_AC;
     }
     return 0xFF;
@@ -42,6 +52,33 @@ static char *find_comma(char *s)
         }
     }
     return NULL;
+}
+
+/* 名称按字节上限截断, 且不切断 UTF-8 多字节序列 */
+static size_t utf8_safe_len(const char *s, size_t max_bytes)
+{
+    size_t len = strlen(s);
+    if (len <= max_bytes) {
+        return len;
+    }
+    size_t nl = max_bytes;
+    /* 被切位置的后续字节是 UTF-8 连续字节(10xxxxxx)则回退 */
+    while (nl > 0 && ((unsigned char)s[nl] & 0xC0) == 0x80) {
+        nl--;
+    }
+    /* 最后保留的字节若是 lead 字节且序列不完整, 丢弃该字符 */
+    if (nl > 0 && (unsigned char)s[nl - 1] >= 0x80) {
+        size_t start = nl - 1;
+        while (start > 0 && ((unsigned char)s[start] & 0xC0) == 0x80) {
+            start--;
+        }
+        unsigned char lead = (unsigned char)s[start];
+        size_t seq = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 1;
+        if (start + seq > nl) {
+            nl = start;
+        }
+    }
+    return nl;
 }
 
 static int parse_lines(const char *text, hass_device_cfg_t *out, int max)
@@ -67,18 +104,7 @@ static int parse_lines(const char *text, hass_device_cfg_t *out, int max)
             if (comma) {
                 *comma = 0;
                 const char *type_str = comma + 1;
-                /* 名称按字节截断到 HASS_NAME_MAX_BYTES-1 并保证不切断 UTF-8 序列 */
-                size_t nl = strlen(buf);
-                while (nl > 0 && (unsigned char)buf[nl - 1] >= 0x80) {
-                    /* 尾部 UTF-8 连续字节: 回退到序列起始 */
-                    size_t k = nl;
-                    while (k > 0 && ((unsigned char)buf[k - 1] & 0xC0) == 0x80) k--;
-                    if ((unsigned char)buf[k - 1] >= 0x80) {
-                        nl = k - 1;   /* 丢弃截断的多字节字符 */
-                    } else {
-                        break;
-                    }
-                }
+                size_t nl = utf8_safe_len(buf, HASS_NAME_MAX_BYTES - 1);
                 while (nl > 0 && buf[nl - 1] == ' ') {
                     buf[--nl] = 0;
                 }
