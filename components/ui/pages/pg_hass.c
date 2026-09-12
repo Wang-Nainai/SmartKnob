@@ -56,13 +56,13 @@ typedef struct {
     int num;                                       /* 已配置设备数 1..6 */
     hass_device_cfg_t devs[HASS_MAX_DEVICES];      /* 设备列表(Web 配置) */
     bool dev_on[HASS_MAX_DEVICES];  /* 本地模拟的开/关状态 */
-    int ac_temp;            /* 空调本地模拟温度 16..30 */
-    int ac_fan;             /* 空调风速 0自动 1低 2中 3高 */
-    int ac_mode;            /* 空调调节模式 0=温度 1=风速 */
+    int ac_temp[HASS_MAX_DEVICES];  /* 空调本地模拟温度 16..30 (按设备独立) */
+    int ac_fan[HASS_MAX_DEVICES];   /* 空调风速 0自动 1低 2中 3高 (按设备独立) */
+    int ac_mode[HASS_MAX_DEVICES];  /* 空调调节模式 0=温度 1=风速 (按设备独立) */
     lv_timer_t *timer;      /* 结算发布: 旋转停止 250ms 后发一次绝对值 */
     uint32_t last_move_tick;
-    int last_pub_temp;      /* 上次已发布的值(去重) */
-    int last_pub_fan;
+    int last_pub_temp[HASS_MAX_DEVICES];  /* 上次已发布的值(去重, 按设备独立) */
+    int last_pub_fan[HASS_MAX_DEVICES];
 } hass_data_t;
 
 static hass_data_t *s_hass;   /* 行回调取实例用 (单实例页面) */
@@ -203,13 +203,15 @@ static void hass_dot_at(hass_data_t *d, int deg)
                           168 - (int32_t)(96.0f * cosf(rad)) - 6);
 }
 
-/* 空调电机模式: 温度 16..30 -> 15 个档位 (0..14), 风速 4 档 (0..3) */
+/* 空调电机模式: 温度 16..30 -> 15 个档位 (0..14), 风速 4 档 (0..3)
+ * 状态按设备槽位独立(多台空调不互串) */
 static void hass_ac_motor_mode(hass_data_t *d)
 {
-    if (d->ac_mode == 0) {
-        motor_set_mode_range(MOTOR_MODE_ADJUSTER, 0, 14, d->ac_temp - 16);
+    int f = d->focus;
+    if (d->ac_mode[f] == 0) {
+        motor_set_mode_range(MOTOR_MODE_ADJUSTER, 0, 14, d->ac_temp[f] - 16);
     } else {
-        motor_set_mode_range(MOTOR_MODE_ADJUSTER, 0, 3, d->ac_fan);
+        motor_set_mode_range(MOTOR_MODE_ADJUSTER, 0, 3, d->ac_fan[f]);
     }
 }
 
@@ -218,24 +220,25 @@ static void hass_ac_motor_mode(hass_data_t *d)
  * 断线时不能标记已发布 —— 否则重连后该值永远丢失 */
 static void hass_flush_pending(hass_data_t *d)
 {
+    int f = d->focus;
     if (!mqtt_ha_is_connected()) {
         return;
     }
-    if (!hass_is_ac(d, d->focus)) {
+    if (!hass_is_ac(d, f)) {
         return;
     }
     char key[16];
-    if (d->ac_mode == 0) {
-        if (d->ac_temp != d->last_pub_temp) {
-            hass_level_key(d, d->focus, false, key, sizeof(key));
-            mqtt_ha_publish_level(key, d->ac_temp);
-            d->last_pub_temp = d->ac_temp;
+    if (d->ac_mode[f] == 0) {
+        if (d->ac_temp[f] != d->last_pub_temp[f]) {
+            hass_level_key(d, f, false, key, sizeof(key));
+            mqtt_ha_publish_level(key, d->ac_temp[f]);
+            d->last_pub_temp[f] = d->ac_temp[f];
         }
     } else {
-        if (d->ac_fan != d->last_pub_fan) {
-            hass_level_key(d, d->focus, true, key, sizeof(key));
-            mqtt_ha_publish_level(key, d->ac_fan);
-            d->last_pub_fan = d->ac_fan;
+        if (d->ac_fan[f] != d->last_pub_fan[f]) {
+            hass_level_key(d, f, true, key, sizeof(key));
+            mqtt_ha_publish_level(key, d->ac_fan[f]);
+            d->last_pub_fan[f] = d->ac_fan[f];
         }
     }
 }
@@ -256,11 +259,12 @@ static void hass_timer_cb(lv_timer_t *t)
  * 有填充弧的状态(空调温度)由弧本身指示, 不放点避免叠加冲突 */
 static void hass_update_dot(hass_data_t *d)
 {
-    if (!hass_is_ac(d, d->focus)) {
-        hass_dot_at(d, d->dev_on[d->focus] ? 300 : 240);
+    int f = d->focus;
+    if (!hass_is_ac(d, f)) {
+        hass_dot_at(d, d->dev_on[f] ? 300 : 240);
         lv_obj_clear_flag(d->dot, LV_OBJ_FLAG_HIDDEN);
-    } else if (d->ac_mode == 1) {
-        hass_dot_at(d, d->ac_fan * 90);
+    } else if (d->ac_mode[f] == 1) {
+        hass_dot_at(d, d->ac_fan[f] * 90);
         lv_obj_clear_flag(d->dot, LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_obj_add_flag(d->dot, LV_OBJ_FLAG_HIDDEN);
@@ -270,30 +274,31 @@ static void hass_update_dot(hass_data_t *d)
 /* 控制视图状态刷新: 状态字/图标圆底/圆环填充/提示 联动 */
 static void hass_ctrl_visual(hass_data_t *d)
 {
-    bool on = d->dev_on[d->focus];
-    bool is_ac = hass_is_ac(d, d->focus);
-    lv_label_set_text(d->label_name, d->devs[d->focus].name);
+    int f = d->focus;
+    bool on = d->dev_on[f];
+    bool is_ac = hass_is_ac(d, f);
+    lv_label_set_text(d->label_name, d->devs[f].name);
     lv_label_set_text(d->label_state, on ? "\xE5\xB7\xB2\xE5\xBC\x80\xE5\x90\xAF"   /* 已开启 */
                                          : "\xE5\xB7\xB2\xE5\x85\xB3\xE9\x97\xAD"); /* 已关闭 */
     lv_obj_set_style_text_color(d->label_state, lv_color_hex(on ? XK_COLOR_TEXT : XK_COLOR_GRAY), 0);
     lv_obj_set_style_bg_color(d->icon_circle, lv_color_hex(on ? XK_COLOR_ACCENT : 0x1C1C1E), 0);
     lv_obj_set_style_text_color(d->icon, lv_color_hex(on ? XK_COLOR_TEXT : 0x8E8E93), 0);
     if (is_ac) {
-        if (d->ac_mode == 0) {
+        if (d->ac_mode[f] == 0) {
             /* 温度: 圆环按 16..30 比例填充, 30° = 满环 */
-            int deg = (d->ac_temp - 16) * 360 / 14;
+            int deg = (d->ac_temp[f] - 16) * 360 / 14;
             if (deg > 360) deg = 360;
             lv_obj_set_style_arc_color(d->dial, lv_color_hex(on ? XK_COLOR_ACCENT : 0x3A3A3A), LV_PART_INDICATOR);
             lv_arc_set_angles(d->dial, 0, deg);
             lv_obj_set_style_text_font(d->icon, &lv_font_montserrat_48, 0);
             char buf[8];
-            snprintf(buf, sizeof(buf), "%d", d->ac_temp);
+            snprintf(buf, sizeof(buf), "%d", d->ac_temp[f]);
             lv_label_set_text(d->icon, buf);
         } else {
             /* 风速: 不填充, 圆点停在四个象限位置 */
             lv_arc_set_angles(d->dial, 0, 0);
             lv_obj_set_style_text_font(d->icon, &lv_font_msyh_16, 0);
-            lv_label_set_text(d->icon, ac_fan_names[d->ac_fan]);
+            lv_label_set_text(d->icon, ac_fan_names[d->ac_fan[f]]);
         }
         lv_label_set_text(d->label_hint, "\xE7\x82\xB9\xE5\x9B\xBE\xE6\xA0\x87\xE5\x88\x87\xE6\x8D\xA2\xE6\xB8\xA9\xE5\xBA\xA6/\xE9\xA3\x8E\xE9\x80\x9F"); /* 点图标切换温度/风速 */
     } else {
@@ -389,7 +394,7 @@ static void hass_icon_cb(lv_event_t *e)
     }
     if (hass_is_ac(d, d->focus)) {
         hass_flush_pending(d);   /* 切模式前把未结算的值发出去 */
-        d->ac_mode ^= 1;
+        d->ac_mode[d->focus] ^= 1;
         hass_ctrl_visual(d);
         hass_ac_motor_mode(d);   /* 模式切换后电机档位跟着换 */
         pm_shake();
@@ -597,11 +602,13 @@ static void pg_hass_create(page_t *p)
     lv_obj_set_style_text_font(hint, &lv_font_msyh_16, 0);
     lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -10);
 
-    d->ac_temp = 26;
-    d->ac_fan = 0;
-    d->ac_mode = 0;
-    d->last_pub_temp = 26;
-    d->last_pub_fan = 0;
+    for (int i = 0; i < d->num; i++) {
+        d->ac_temp[i] = 26;
+        d->ac_fan[i] = 0;
+        d->ac_mode[i] = 0;
+        d->last_pub_temp[i] = 26;
+        d->last_pub_fan[i] = 0;
+    }
     d->last_move_tick = 0;
     hass_ctrl_visual(d);
     d->timer = lv_timer_create(hass_timer_cb, 50, d);
@@ -627,17 +634,18 @@ static void pg_hass_on_rotate(page_t *p, int32_t steps)
     if (d->in_control) {
         if (hass_is_ac(d, d->focus)) {
             /* 空调: 电机档位即值, 界面实时跟随; MQTT 由 timer 结算后发布终值 */
+            int f = d->focus;
             int32_t pos = motor_get_position();
-            if (d->ac_mode == 0) {
+            if (d->ac_mode[f] == 0) {
                 int t = 16 + pos;
-                if (t != d->ac_temp) {
-                    d->ac_temp = t;
+                if (t != d->ac_temp[f]) {
+                    d->ac_temp[f] = t;
                     hass_ctrl_visual(d);
                     d->last_move_tick = lv_tick_get();
                 }
             } else {
-                if (pos != d->ac_fan) {
-                    d->ac_fan = pos;
+                if (pos != d->ac_fan[f]) {
+                    d->ac_fan[f] = pos;
                     hass_ctrl_visual(d);
                     d->last_move_tick = lv_tick_get();
                 }
