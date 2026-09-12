@@ -238,16 +238,16 @@ motor_get_mode_seq
 
 `app_main`、LVGL、Input、SCD40、Sysmon 均固定在 core0；NimBLE host 和 WiFi task 也配置在 core0。Motor 独占 core1 是当前实时隔离策略。
 
-### 6.4 当前 12 种手感模式
+### 6.4 当前 13 种手感模式
 
-`motor_mode_t` 当前有 12 个模式：
+`motor_mode_t` 当前有 13 个模式：
 
 | # | 枚举 | 当前显示/用途 |
 |---|---|---|
 | 1 | `MOTOR_MODE_UNBOUND_NO_DETENTS` | 无边界无制动 |
 | 2 | `MOTOR_MODE_BOUND_NO_DETENTS` | 有边界无制动，范围 0..10 |
-| 3 | `MOTOR_MODE_MULTI_TURN_NO_DETENTS` | 多圈无制动，范围 0..72 |
-| 4 | `MOTOR_MODE_ON_OFF` | 开关模式，0..1 |
+| 3 | `MOTOR_MODE_MULTI_TURN_NO_DETENTS` | 多圈无制动 0..72 |
+| 4 | `MOTOR_MODE_ON_OFF` | 开关模式 0..1（HASS 灯开关两档） |
 | 5 | `MOTOR_MODE_AUTO_RETURN_CENTER` | 自动回中 |
 | 6 | `MOTOR_MODE_FINE_NO_DETENTS` | 精细无制动，约 1 度/档，范围 0..255 |
 | 7 | `MOTOR_MODE_FINE_DETENTS` | 精细有制动，约 1 度/档，范围 0..255 |
@@ -256,10 +256,11 @@ motor_get_mode_seq
 | 10 | `MOTOR_MODE_MAGNETIC_DETENTS` | 磁性制动，范围 0..31 |
 | 11 | `MOTOR_MODE_RETURN_CENTER_WITH_DETENTS` | 回中带制动，范围 -6..6 |
 | 12 | `MOTOR_MODE_UNBOUNDED_DETENTS` | 无边界棘轮，列表浏览，约 8.2258 度/档 |
+| 13 | `MOTOR_MODE_ADJUSTER` | 调节模式，约 25.714 度/档（360/14，一整圈 14 档），HASS 空调温度/风速用 |
 
 磁性制动模式的 4 个特殊吸附点当前为 `{2, 10, 21, 22}`。
 
-当前已知冲突：`pg_menu.c` 的菜单副标题仍写“11 种手感模式”，但 `motor_get_mode_count()` 和实际枚举均为 12。
+`pg_menu` 的菜单副标题已与 `motor_get_mode_count()` 一致（13）。
 
 ### 6.5 保护与手感算法
 
@@ -446,7 +447,7 @@ PAGE_SYSMON
 
 `flick_block` 当前用于：
 
-- `pg_hass` 控制视图：旋转代表 LEFT/RIGHT 输入。
+- `pg_hass` 控制视图：旋转代表设备输入（灯=开/关两档，空调=温度/风速调节）。
 - `pg_setting` 编辑视图：旋转代表亮度或熄屏时长输入。
 
 其他页面即使有 `on_back`，也不在甩动返回白名单内。触摸确认、点击和状态栏返回按钮仍是主要导航手段。
@@ -489,8 +490,8 @@ MQTT
 | `pg_startup` | SmartKnob 启动动画；2 秒后根据触摸校准状态进入 `pg_tcal` 或 `pg_menu` |
 | `pg_menu` | 6 项三副本无限循环菜单；触摸滑动和旋钮切换焦点，点击进入 |
 | `pg_pcdial` | BLE HID 电脑控制；音量/滚轮模式切换、播放暂停、上一首/下一首、配对状态 |
-| `pg_playground` | 12 种 Motor 手感试玩；点击切换模式，显示圆盘、位置和越界红弧 |
-| `pg_hass` | 4 类设备循环列表；控制视图中旋转发送 LEFT/RIGHT，点击发送 ON/OFF |
+| `pg_playground` | 13 种 Motor 手感试玩；点击切换模式，Apple 风格圆盘（有界=量程窗内填充弧+端点红弧，无界=圆点绕全周） |
+| `pg_hass` | 真实设备循环列表：卧室灯/客厅灯/过道灯（开/关两档，旋转点击同效）+ 卧室空调（点图标圆底切温度/风速模式，旋转=每度一档/风速四象限）；控制视图为 Apple 风格表盘（温度=比例填充弧，开/关与风速=圆点定位） |
 | `pg_env` | CO2、温湿度、等级卡和 2 小时趋势图；旋转或点击切换 CO2/温度/湿度 |
 | `pg_setting` | 亮度、熄屏时长、系统监控、蓝牙清除配对、Motor 重新校准 |
 | `pg_sysinfo` | 版本、IP、MQTT、运行时长、熄屏配置、构建时间、Web 地址和工厂测试入口 |
@@ -591,7 +592,7 @@ CONFIG_LV_USE_STDLIB_MALLOC LV_STDLIB_BUILTIN
 lv_font_msyh_16
 字体源：Microsoft YaHei 16 px
 格式：LVGL FMT_TXT / PLAIN 4bpp / SPARSE_TINY
-当前字形数：280
+当前字形数：294
 line_height：22
 base_line：5
 ```
@@ -634,7 +635,7 @@ components/ui/smartknob_ui.c
 3. 运行 `python tools/check_glyphs.py`。
 4. 重新编译并检查缺字。
 
-当前校验结果：源码已使用 CJK 字符 166 个，当前字库覆盖 280 字形，检查通过。
+当前校验结果：源码已使用 CJK 字符 175 个，当前字库覆盖 294 字形，检查通过。
 
 ---
 
@@ -840,11 +841,11 @@ homeassistant/sensor/<client_id>/state
 
 ### 15.3 设备动作触发器
 
-设备发布 16 个 `device_automation` discovery，组合为：
+设备发布 8 个 `device_automation` discovery（真实设备槽位），组合为：
 
 ```text
-4 类设备：light / ac / fan / washer
-4 个动作：on / off / left / right
+3 盏灯：bedroom_light / living_light / hall_light，动作 on / off
+卧室空调：bedroom_ac，动作 on / off
 ```
 
 动作 topic：
@@ -856,11 +857,11 @@ smartknob/action
 载荷示例：
 
 ```text
-light_on
-fan_right
+bedroom_light_on
+bedroom_ac_off
 ```
 
-触发器发现配置每 400 ms 发布一条，发送完成后停止定时器。重新连接时会重新发布。
+触发器发现配置每 400 ms 发布一条，发送完成后停止定时器。重新连接时会重新发布；连接时还会对旧版占位触发器（light/ac/fan/washer × on/off/left/right）发空保留载荷让 HA 清除。
 
 ### 15.4 下行命令
 
@@ -880,12 +881,22 @@ smartknob/cmnd/#
 
 ### 15.5 页面控制通道
 
-`pg_hass` 控制视图同时发布：
+`pg_hass` 控制视图发布两类消息：
 
 ```text
-<mqtt_topic>/HOME/<设备中文名>  payload=LEFT/RIGHT/ON/OFF
-smartknob/action                 payload=<device>_<action>
+smartknob/action                          payload=<dev>_<act>，边沿事件（on/off）
+smartknob/level/<key>                     整数绝对值（旋转类调节结算后的终值）
+<mqtt_topic>/HOME/<设备中文名>            payload=ON/OFF（X-Knob 风格兼容通道）
 ```
+
+level 通道当前键：
+
+```text
+bedroom_ac_temp  16..30（空调温度）
+bedroom_ac_fan   0..3（自动/低/中/高）
+```
+
+结算发布规则：空调旋转调节时 UI 实时跟随，MQTT 在静止 250 ms 后只发布一次终值——惯性滑过若干档不会触发多次 HA 动作；切换温度/风速模式或退出控制视图前会强制 flush 未结算值。灯的开/关走 action 通道（边沿触发，电机两档位置即状态）。
 
 `mqtt_topic` 默认是 `knob`，可通过 NVS `webcfg/mqtt_topic` 覆盖；当前 Web 保存表单没有提供该字段。
 
@@ -1115,7 +1126,7 @@ powershell -File tools\build.ps1 build
 | 菜单动画 | 代码实现三副本循环和宽度动画；待实机确认 |
 | Motor 闭环/力反馈 | FOC、12 模式和校准持久化已实现；待实机确认 |
 | WiFi/AP 回退 | 代码实现 90 秒回退和管理页；待实机确认 |
-| MQTT/HA Discovery | 3 个 sensor + 16 个 device_automation 已实现；待实机确认 |
+| MQTT/HA Discovery | 3 个 sensor + 8 个 device_automation + level 通道已实现；待实机确认 |
 | Web/OTA | HTTP API、chunked history 和 OTA 分区已实现；待实机确认 |
 | LED | 代码实现状态灯和互斥保护；待实机确认 |
 | 长时间稳定性 | 无当前版本连续运行报告；待实机确认 |
@@ -1140,17 +1151,17 @@ powershell -File tools\build.ps1 build
 14. 不把没有绝对时间戳的 env_hist 描述成已完成真实时间戳历史。
 15. 不把 Web 恢复出厂描述成全 NVS 擦除。
 16. 不把代码级实现描述成当前硬件已完整验证。
+17. 表盘指示全局唯一规则：连续值用填充弧，离散位置用圆点，两者互斥不得叠加；弧更新一律用 `lv_arc_set_angles` 直接设角，禁止用 `lv_arc_set_value`（内建值动画与定时器连发冲突，见 BUG-022/023）。
+18. `motor_get_angle_offset_deg()` 是档内偏角（恒可能非 0），不是越界距离；越界判定必须同时看位置是否停在边界档与偏移方向是否朝界外（见 BUG-022）。
+19. 旋转类调节（温度/风速）走 level 通道结算发布（静止 250 ms 发一次绝对值），禁止按档连发 ±1 事件（惯性滑档会造成 HA 连跳，见 BUG-021 之后的结算发布改造）。
 
 ---
 
 ## 23. 当前文档与代码冲突摘要
 
 1. 实际 CPU 配置是 160 MHz，旧基线写 240 MHz。
-2. 实际有 12 种 Motor 模式，旧架构文档和 `pg_menu` 文案仍写 11。
-3. 字库当前是 280 字形，旧 Bug 文档中的 215 是历史值。
-4. `CONFIG_LV_USE_STDLIB_MALLOC=1` 当前没有让 CLIB 生效，实际被 builtin choice 覆盖。
-5. Web `/api/envhist` 当前标记 300 秒间隔，但 env_hist 实际按 60 秒采样。
-6. page_mgr 当前在 pop 动画 ready 回调里删除页面对象，和硬约束存在冲突。
-7. `pg_setting` 重新校准路径在 LVGL 回调中阻塞 600 ms。
-8. `pg_menu` 仍显示“11 种手感模式”，实际模式数是 12。
-9. `README.md` 仍包含旧 PSRAM、SPI 时钟、模式数量和依赖描述；本次任务只同步两份 docs 文档。
+2. `CONFIG_LV_USE_STDLIB_MALLOC=1` 当前没有让 CLIB 生效，实际被 builtin choice 覆盖。
+3. Web `/api/envhist` 当前标记 300 秒间隔，但 env_hist 实际按 60 秒采样。
+4. page_mgr 当前在 pop 动画 ready 回调里删除页面对象，和硬约束存在冲突。
+5. `pg_setting` 重新校准路径在 LVGL 回调中阻塞 600 ms。
+6. `README.md` 仍包含旧 PSRAM、SPI 时钟、模式数量和依赖描述；本次任务只同步两份 docs 文档。

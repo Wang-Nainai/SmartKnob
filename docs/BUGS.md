@@ -143,7 +143,7 @@
 - 原因：旧字库只包含少量旧文案，且早期没有完整覆盖 ASCII、度和间隔号。
 - 归属：UI / Font。
 - 历史结果：曾经生成 215 字形并通过覆盖检查。
-- 当前状态：字库已重新生成，当前是 280 字形，`line_height=22`、`base_line=5`。
+- 当前状态：字库已重新生成，当前是 294 字形，`line_height=22`、`base_line=5`。
 - 当前工具缺口：`gen_msyh_font.py` 扫描 Motor 文案，但 `check_glyphs.py` 只检查 UI 页面和 `smartknob_ui.c`，不检查 `motor.cpp`。
 
 ## BUG-018（Regression）`lv_scale` 吞掉页面级点击
@@ -174,6 +174,22 @@
 - 归属：Motor / FOC 校准持久化。
 - 修复方式：NVS 只持久化接线方向 `sensor_direction`（单 blob `mcal/cal`，含 magic/版本，原子写入）；零电角每次开机由 `alignSensor()` 重新锚定；全流程校准的保存增加极对数校验（`pp_check_result`）门控；旧三键存档开机自动迁移方向。
 - 当前状态：已修复。禁止恢复“预置 NVS 中的 zero_electric_angle 跳过零电角测量”；除非改用带 Z 索引或绝对式接口，否则零电角必须每次开机重新锚定（开机时间约 1.5 秒是增量编码器的物理下限）。
+
+## BUG-022（Regression）手感页红弧到处出现/画满一圈
+
+- 现象：手感页切到无界模式整个环被红色填满；开关模式位置在量程内也冒出红色溢出弧。
+- 原因：两个错误叠加。1) 误把 `motor_get_angle_offset_deg()` 当越界距离——它实际是档内偏角 `angle_to_detent_center`（motor.cpp:512），恒可能非 0（粗档 ±4°，60° 档距模式可达 ±30°），"off != 0 就画红"在所有模式随机触发。2) `lv_arc_set_angles(start, end)` 在 start > end 时 LVGL 顺时针绕远路绘制（25→0 = 335°），直接画满一圈。
+- 归属：UI / pg_playground。
+- 修复方式：红弧双条件判定——位置停在边界档 AND 档内偏移方向朝界外，幅值封顶 30°；无界模式永不画红弧/填充并清理旧填充残留；切模式瞬间强制清零红弧（电机命令异步，瞬间 offset 是旧值）。
+- 当前状态：已修复。防回退：`motor_get_angle_offset_deg()` 不是越界距离，禁止用它单独做越界判定。
+
+## BUG-023（Regression）HASS 空调温度填充弧不可见
+
+- 现象：空调温度调节时圆环上无任何反馈（只有中央数字变化）。
+- 原因：控制视图圆环的 indicator 宽度为 0（v4"圆点负责指示"时代的残留样式），温度改用填充弧后从未打开宽度。
+- 归属：UI / pg_hass。
+- 修复方式：indicator 宽度 12 + 圆头，颜色随开关状态联动。
+- 当前状态：已修复。防回退：表盘弧层创建时必须核对指示层宽度；全局规则见 ARCHITECTURE.md §22 第 17 条（填充弧与圆点互斥、一律 `lv_arc_set_angles` 直接设角、禁止 `lv_arc_set_value`——其内建值动画与 50ms 定时器连发冲突曾造成填充滞后回弹）。
 
 ---
 
@@ -206,11 +222,10 @@
 - 影响：短暂阻塞 UI，违反 UI 回调不做长阻塞的约束。
 - 状态：当前风险。由于随后重启，影响窗口有限，但仍应移除或改为非阻塞重启流程。
 
-## CUR-005 主菜单文案仍写 11 种模式
+## CUR-005 主菜单文案与模式数不一致（已解决）
 
-- 证据：`pg_menu.c` 的描述文案写“11 种手感模式”，实际 `motor_get_mode_count()` 为 12。
-- 影响：UI 信息与实际 Motor 模式数量不一致。
-- 状态：当前风险，属于 UI 文案修复。
+- 历史：`pg_menu.c` 曾写“11 种手感模式”，而实际为 12；新增 `MOTOR_MODE_ADJUSTER` 后为 13。
+- 当前状态：已解决；`pg_menu` 副标题已更新为 13，与 `motor_get_mode_count()` 一致。
 
 ## CUR-006 `README.md` 与当前代码不一致
 
@@ -263,7 +278,7 @@
 | 菜单聚焦动画 | 主菜单旋转和触摸滑动 | 待实机确认 |
 | Motor 闭环/力反馈 | `pg_playground` 12 模式 | 待实机确认 |
 | WiFi/AP 配网 | STA 连接、90 秒回退、192.168.4.1 | 待实机确认 |
-| MQTT/HA Discovery | 3 个 sensor + 16 个 device_automation | 待实机确认 |
+| MQTT/HA Discovery | 3 个 sensor + 8 个 device_automation + level 通道 | 待实机确认 |
 | Web/OTA | `/status`、`/api/envhist`、`/ota` | 待实机确认 |
 | LED | WiFi/MQTT 状态色和工厂测试 | 待实机确认 |
 | 长时间稳定性 | 连续运行、heap poisoning 日志、WDT | 待实机确认 |
