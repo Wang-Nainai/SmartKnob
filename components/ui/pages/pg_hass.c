@@ -211,9 +211,13 @@ static void hass_ac_motor_mode(hass_data_t *d)
 }
 
 /* 结算发布: 空调节值(温度/风速)在旋转静止 250ms 后发布一次绝对值,
- * 惯性滑过若干档也只发终值, HA 不会收到一串中间值 */
+ * 惯性滑过若干档也只发终值, HA 不会收到一串中间值.
+ * 断线时不能标记已发布 —— 否则重连后该值永远丢失 */
 static void hass_flush_pending(hass_data_t *d)
 {
+    if (!mqtt_ha_is_connected()) {
+        return;
+    }
     if (d->ac_mode == 0) {
         if (d->ac_temp != d->last_pub_temp) {
             mqtt_ha_publish_level("bedroom_ac_temp", d->ac_temp);
