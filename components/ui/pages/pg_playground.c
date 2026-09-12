@@ -82,8 +82,10 @@ static void pg_apply_mode(pg_data_t *d)
     }
     }
 
-    /* 切模式瞬间按新窗口清场刷新, 不等 timer, 不留旧模式残影 */
+    /* 切模式瞬间按新窗口清场刷新, 不等 timer, 不留旧模式残影.
+     * 电机命令是异步的, 瞬间的 offset 可能还是旧模式残值, 红弧强制清零 */
     pg_refresh_fill(d, 0);
+    lv_arc_set_angles(d->red_arc, 0, 0);
 
     motor_set_mode(m, 0, 0);
 }
@@ -97,16 +99,25 @@ static void pg_dot_set(pg_data_t *d, int deg)
                           168 - (int32_t)(96.0f * cosf(rad)) - 6);
 }
 
-/* 有界模式填充刷新: 直接设置弧角度(无内建动画).
- * 窗口弧 main=背景, indicator 从窗口起点长到当前值位置, 一体指示 */
+/* 表盘指示统一入口 (定时器与切模式都只调这一个):
+ * - 无界/回中: 圆点绕全周, 无窗口无填充无红弧
+ * - 有界: 填充弧从窗口起点长到当前值; 红弧只在"真的越过边界"时出现
+ *   (电机侧 offset = 当前档内偏角, 恒不为 0 —— 越界判定必须同时看
+ *    位置是否停在边界档 AND 偏移方向朝界外, 且幅值封顶防绕圈)
+ * 全部用 lv_arc_set_angles 直接设角, 无内建动画, 50ms 连发不冲突 */
 static void pg_refresh_fill(pg_data_t *d, int32_t pos)
 {
+    float off = motor_get_angle_offset_deg();
+
     if (d->win_span == 360) {
-        /* 无界: 圆点绕全周 (纯位置指示, 无窗口无填充) */
-        lv_obj_clear_flag(d->dot, LV_OBJ_FLAG_HIDDEN);
+        lv_arc_set_angles(d->range_arc, 0, 0);
+        lv_arc_set_angles(d->red_arc, 0, 0);
         pg_dot_set(d, (int32_t)(pos % 72) * 5);
+        lv_obj_clear_flag(d->dot, LV_OBJ_FLAG_HIDDEN);
         return;
     }
+
+    /* 有界: 填充弧 (窗口弧 main=背景, indicator 从窗口起点长出) */
     lv_obj_add_flag(d->dot, LV_OBJ_FLAG_HIDDEN);
     int32_t v = pos - d->win_min;
     if (v < 0) v = 0;
@@ -114,34 +125,33 @@ static void pg_refresh_fill(pg_data_t *d, int32_t pos)
     if (v > vmax) v = vmax;
     int32_t end = d->win_deg0 + (int32_t)(((int64_t)v * d->win_span) / vmax);
     lv_arc_set_angles(d->range_arc, d->win_deg0, end);
+
+    /* 红弧: 位置停在边界档 且 档内偏移朝界外 才算越界, 幅值封顶 30° */
+    int32_t o = (int32_t)off;
+    if (o > 30) o = 30;
+    if (o < -30) o = -30;
+    bool oob_min = (pos <= d->win_min && o > 0);
+    bool oob_max = (pos >= d->win_max && o < 0);
+    if (oob_min) {
+        lv_arc_set_angles(d->red_arc, d->win_deg0 - o, d->win_deg0);
+    } else if (oob_max) {
+        lv_arc_set_angles(d->red_arc, d->win_deg0 + d->win_span,
+                          d->win_deg0 + d->win_span - o);
+    } else {
+        lv_arc_set_angles(d->red_arc, 0, 0);
+    }
 }
 
 static void pg_playground_timer(lv_timer_t *t)
 {
     pg_data_t *d = lv_timer_get_user_data(t);
     int32_t pos = motor_get_position();
-    float off = motor_get_angle_offset_deg();
 
     pg_refresh_fill(d, pos);
 
     char buf[24];
     snprintf(buf, sizeof(buf), "%ld", (long)pos);
     lv_label_set_text(d->label_value, buf);
-
-    /* out-of-bounds red arc: 从量程窗口边缘溢出 */
-    if (off != 0) {
-        int32_t start, end;
-        if (pos <= 0) {
-            start = d->win_deg0 - (int32_t)off;
-            end = d->win_deg0;
-        } else {
-            start = d->win_deg0 + d->win_span;
-            end = d->win_deg0 + d->win_span + (int32_t)off;
-        }
-        lv_arc_set_angles(d->red_arc, start, end);
-    } else {
-        lv_arc_set_angles(d->red_arc, 0, 0);
-    }
 }
 
 /* 触摸点击整页 → 切换到下一种手感模式 */
