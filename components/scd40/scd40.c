@@ -12,6 +12,7 @@ static const char *TAG = "scd40";
 #define SCD40_CMD_STOP_PERIODIC  0x3F86
 #define SCD40_CMD_DATA_READY     0xE4B8
 #define SCD40_CMD_READ_MEAS      0xEC05
+#define SCD40_CMD_REINIT         0x3646   /* 仅怠速态合法: 复位内部状态, 20ms */
 
 #define SCD40_FIRST_MEASUREMENT_DELAY_MS 5000
 
@@ -98,6 +99,25 @@ esp_err_t scd40_stop_periodic(void)
     return scd40_write_cmd(SCD40_CMD_STOP_PERIODIC);
 }
 
+/* 测量重启序列: 停止 -> 等退出测量态 -> reinit 清内部状态 -> 重新启动.
+ * 软重启时传感器可能带着上一轮的测量状态, 直接 start 会被忽略
+ * (表现为 get_data_ready 恒返回未就绪) —— 此序列强制拉回正常测量 */
+esp_err_t scd40_restart_measurement(void)
+{
+    esp_err_t err = scd40_stop_periodic();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "stop failed (0x%X), trying start anyway", err);
+    }
+    vTaskDelay(pdMS_TO_TICKS(800));
+    err = scd40_write_cmd(SCD40_CMD_REINIT);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "reinit failed (0x%X), retry start anyway", err);
+    } else {
+        vTaskDelay(pdMS_TO_TICKS(30));
+    }
+    return scd40_start_periodic();
+}
+
 esp_err_t scd40_data_ready(bool *ready)
 {
     uint8_t cmd[2] = { SCD40_CMD_DATA_READY >> 8, SCD40_CMD_DATA_READY & 0xFF };
@@ -117,6 +137,12 @@ esp_err_t scd40_data_ready(bool *ready)
     if (!*ready) {
         if (not_ready_count++ % 5 == 0) {
             ESP_LOGI(TAG, "data not ready, status=0x%04X", status);
+        }
+        if (not_ready_count == 30) {
+            /* 60s 无数据: 传感器自愈 (软重启后 start 被忽略等状态) */
+            ESP_LOGW(TAG, "no data for 60s, recovering sensor (stop->reinit->start)");
+            scd40_restart_measurement();
+            not_ready_count = 0;
         }
     } else {
         not_ready_count = 0;

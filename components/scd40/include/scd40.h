@@ -15,5 +15,7 @@ typedef struct {
 esp_err_t scd40_init(void);
 esp_err_t scd40_start_periodic(void);
 esp_err_t scd40_stop_periodic(void);
+/* 停止 -> 800ms -> reinit -> 启动的完整重启序列 (自愈软重启后的卡死状态) */
+esp_err_t scd40_restart_measurement(void);
 esp_err_t scd40_data_ready(bool *ready);
 esp_err_t scd40_read(scd40_data_t *data);

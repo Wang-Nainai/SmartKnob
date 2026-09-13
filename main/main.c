@@ -120,9 +120,7 @@ void app_main(void)
 
     ESP_LOGI(TAG, "Initializing SCD40");
     if (scd40_init() == ESP_OK) {
-        scd40_stop_periodic();
-        vTaskDelay(pdMS_TO_TICKS(500));
-        esp_err_t start_err = scd40_start_periodic();
+        esp_err_t start_err = scd40_restart_measurement();
         if (start_err == ESP_OK) {
             ESP_LOGI(TAG, "SCD40 periodic measurement started");
         } else {
