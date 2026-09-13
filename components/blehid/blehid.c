@@ -17,7 +17,7 @@ static const char *TAG = "blehid";
 #define HID_APPEARANCE      0x03C2      /* Generic HID */
 
 /* ---------------- HID Report Map ----------------
- * Report ID 1: Consumer Control (16bit usage 数组)
+ * Report ID 1: Consumer Control (16 位位图, 行业标准形式)
  * Report ID 2: Mouse (3 按键 + XY 相对 + 滚轮)
  * Windows/macOS/Linux 免驱识别。 */
 static const uint8_t s_report_map[] = {
@@ -43,18 +43,27 @@ static const uint8_t s_report_map[] = {
     0x81, 0x06,                     /*     Input (Data, Var, Rel) */
     0xC0, 0xC0,                     /*   End Collection x2 */
     /* Consumer Control
-     * 8-bit usage 数组槽(Count 2): 16-bit 槽(LogicalMax 1023)的写法
-     * 实测 Windows/Android 的 HID 解析器都不映射(绑定成功但输入全无);
-     * 8-bit 数组(UsageMax 255)是 ESP32-BLE-Keyboard 等广泛验证的形式,
-     * 报文 [ID, usage, 0], 所有音量/媒体码 < 255 */
+     * 行业标准 16 位位图形式: 每用法占 1 位, 报文 [ID, 位图低字节, 位图高字节]
+     * 音量上=bit5 音量下=bit6 媒体/静音/扫描=bit0-4.
+     * 历史: 16bit usage 值槽(LogicalMax 1023)与 8bit 数组(UsageMax 255)
+     * 两种写法 Android 可解析, Windows 的 HID 类驱动建出设备但不消费输入
+     * (连接/订阅/通知全成功却无动作) —— 位图形式是 Windows 免疫的关键 */
     0x05, 0x0C,                     /* Usage Page (Consumer) */
     0x09, 0x01,                     /* Usage (Consumer Control) */
     0xA1, 0x01,                     /* Collection (Application) */
     0x85, 0x01,                     /*   Report ID (1) */
-    0x19, 0x00, 0x2A, 0xFF, 0x00,   /*   Usage Min 0, Max 255 */
-    0x15, 0x00, 0x26, 0xFF, 0x00,   /*   Logical Min 0, Max 255 */
-    0x75, 0x08, 0x95, 0x02,         /*   Size 8, Count 2 */
-    0x81, 0x00,                     /*   Input (Data, Array, Abs) */
+    0x75, 0x01, 0x95, 0x07,         /*   Size 1, Count 7 */
+    0x15, 0x00, 0x25, 0x01,         /*   Logical 0..1 */
+    0x09, 0xB5,                     /*   Usage (Scan Next)   bit0 */
+    0x09, 0xB6,                     /*   Usage (Scan Prev)   bit1 */
+    0x09, 0xB7,                     /*   Usage (Stop)        bit2 */
+    0x09, 0xCD,                     /*   Usage (Play/Pause)  bit3 */
+    0x09, 0xE2,                     /*   Usage (Mute)        bit4 */
+    0x09, 0xE9,                     /*   Usage (Volume Up)   bit5 */
+    0x09, 0xEA,                     /*   Usage (Volume Down) bit6 */
+    0x81, 0x02,                     /*   Input (Data, Var, Abs) */
+    0x75, 0x01, 0x95, 0x09,         /*   Size 1, Count 9 */
+    0x81, 0x03,                     /*   Input (Const, Var, Abs) 补齐 16 位 */
     0xC0,
 };
 
@@ -426,13 +435,33 @@ void blehid_unpair_all(void)
     ESP_LOGI(TAG, "all bonds cleared");
 }
 
+/* Consumer usage 码 -> 位图位 (Report Map 中 7 个显式用法的位序) */
+static uint16_t consumer_usage_to_mask(uint16_t usage)
+{
+    switch (usage) {
+    case 0xB5: return 1u << 0;   /* Scan Next */
+    case 0xB6: return 1u << 1;   /* Scan Prev */
+    case 0xB7: return 1u << 2;   /* Stop */
+    case 0xCD: return 1u << 3;   /* Play/Pause */
+    case 0xE2: return 1u << 4;   /* Mute */
+    case 0xE9: return 1u << 5;   /* Volume Up */
+    case 0xEA: return 1u << 6;   /* Volume Down */
+    default:   return 0;
+    }
+}
+
 void blehid_consumer_send(uint16_t usage)
 {
     if (!s_connected || proto_mode_val == 0) {
         return;   /* boot 协议无 consumer 格式 */
     }
-    ESP_LOGI(TAG, "consumer send usage=0x%02X (report_id=1)", usage);
-    uint8_t press[3] = { 0x01, (uint8_t)(usage & 0xFF), (uint8_t)(usage >> 8) };
+    uint16_t mask = consumer_usage_to_mask(usage);
+    if (mask == 0) {
+        ESP_LOGW(TAG, "consumer usage=0x%02X not mapped, dropped", usage);
+        return;
+    }
+    ESP_LOGI(TAG, "consumer send usage=0x%02X mask=0x%04X (report_id=1)", usage, mask);
+    uint8_t press[3]   = { 0x01, (uint8_t)(mask & 0xFF), (uint8_t)(mask >> 8) };
     uint8_t release[3] = { 0x01, 0x00, 0x00 };
     notify(h_consumer_report, press, 3);
     vTaskDelay(pdMS_TO_TICKS(8));
