@@ -48,7 +48,8 @@ static const uint8_t s_report_map[] = {
     0x26, 0x10, 0x0e,               /*     Logical Max (3600) */
     0x81, 0x06,                     /*     Input (Data, Var, Rel) 相对旋转 */
     0xC0,                           /*   End Collection (Physical) */
-    0xC0,                           /* End Collection (Application) */    /* Mouse */
+    0xC0,                           /* End Collection (Application) */
+    /* Mouse */
     0x05, 0x01,                     /* Usage Page (Generic Desktop) */
     0x09, 0x02,                     /* Usage (Mouse) */
     0xA1, 0x01,                     /* Collection (Application) */
@@ -509,8 +510,8 @@ void blehid_dial_rotate(int steps)
     if (!s_connected || steps == 0) {
         return;
     }
-    if (steps > 7) steps = 7;
-    if (steps < -7) steps = -7;
+    if (steps > 3600) steps = 3600;
+    if (steps < -3600) steps = -3600;
     /* bit0=按键位恒 0; bit1..15 = 旋转量(有符号, 左移 1 位嵌入) */
     uint16_t val = (uint16_t)((steps << 1) & 0xFFFE);
     uint8_t report[3] = { 10, (uint8_t)(val & 0xFF), (uint8_t)(val >> 8) };
