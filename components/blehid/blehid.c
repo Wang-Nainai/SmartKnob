@@ -21,7 +21,34 @@ static const char *TAG = "blehid";
  * Report ID 2: Mouse (3 按键 + XY 相对 + 滚轮)
  * Windows/macOS/Linux 免驱识别。 */
 static const uint8_t s_report_map[] = {
-    /* Mouse */
+    /* Surface Dial — Microsoft 官方 BLE HID 描述符 (来自 Surface_Dial_Arduino
+     * 项目的 ATtiny V-USB 实现, 与真 Surface Dial 同构):
+     * Generic Desktop Usage 0x0E (Rudimentary Dial) 是 Windows 10 1903+
+     * 原生支持的设备类 —— 旋转由系统处理(音量/滚动/媒体), 按压弹系统
+     * 圆盘菜单, 完全绕开 Consumer 页媒体键的 Windows 解析怪癖。 */
+    0x05, 0x01,                     /* Usage Page (Generic Desktop) */
+    0x09, 0x0e,                     /* Usage (Rudimentary Dial) */
+    0xA1, 0x01,                     /* Collection (Application) */
+    0x85, 10,                       /*   Report ID (10) */
+    0x05, 0x0d,                     /*   Usage Page (Digitizers) */
+    0x09, 0x21,                     /*   Usage (Pulse) 触觉脉冲标志 */
+    0xA1, 0x00,                     /*   Collection (Physical) */
+    0x05, 0x09,                     /*     Usage Page (Button) */
+    0x09, 0x01,                     /*     Usage (Button 1) 按下 */
+    0x95, 0x01, 0x75, 0x01,         /*     Count 1, Size 1 */
+    0x15, 0x00, 0x25, 0x01,         /*     Logical 0..1 */
+    0x81, 0x02,                     /*     Input (Data, Var, Abs) */
+    0x05, 0x01,                     /*     Usage Page (Generic Desktop) */
+    0x09, 0x37,                     /*     Usage (Dial 旋转) */
+    0x95, 0x01, 0x75, 0x0f,         /*     Count 1, Size 15 */
+    0x55, 0x0f, 0x65, 0x14,         /*     Unit Exponent, Unit (角度) */
+    0x36, 0xf0, 0xf1,               /*     Physical Min (-3600) */
+    0x46, 0x10, 0x0e,               /*     Physical Max (3600) */
+    0x16, 0xf0, 0xf1,               /*     Logical Min (-3600) */
+    0x26, 0x10, 0x0e,               /*     Logical Max (3600) */
+    0x81, 0x06,                     /*     Input (Data, Var, Rel) 相对旋转 */
+    0xC0,                           /*   End Collection (Physical) */
+    0xC0,                           /* End Collection (Application) */    /* Mouse */
     0x05, 0x01,                     /* Usage Page (Generic Desktop) */
     0x09, 0x02,                     /* Usage (Mouse) */
     0xA1, 0x01,                     /* Collection (Application) */
@@ -82,6 +109,7 @@ static uint8_t s_own_addr_type = 0;
 /* GATT 句柄 */
 static uint16_t h_consumer_report;
 static uint16_t h_mouse_report;
+static uint16_t h_dial_report;
 
 /* ---------------- UUID ---------------- */
 static const ble_uuid16_t uuid_svc_hid   = BLE_UUID16_INIT(0x1812);
@@ -98,6 +126,7 @@ static const ble_uuid16_t uuid_chr_pnp = BLE_UUID16_INIT(0x2A50);
 /* Report Reference 描述符值: {Report ID, 类型(1=Input)} */
 static const uint8_t report_ref_consumer[2] = { 0x01, 0x01 };
 static const uint8_t report_ref_mouse[2]    = { 0x02, 0x01 };
+static const uint8_t report_ref_dial[2]     = { 10, 0x01 };
 /* HID Information: bcdHID=1.1, country=0, flags=normally connectable */
 static const uint8_t hid_info_val[4] = { 0x01, 0x01, 0x00, 0x02 };
 static uint8_t proto_mode_val = 0x01;         /* 当前协议: 1=report, 0=boot(主机可写切换) */static const uint8_t battery_val = 100;
@@ -215,6 +244,20 @@ static const struct ble_gatt_svc_def gatt_svcs[] = {
                       .att_flags = BLE_ATT_F_READ,
                       .access_cb = report_ref_cb,
                       .arg = (void *)report_ref_mouse },
+                    { 0 },
+                },
+            },
+            {   /* Input Report: Surface Dial (Microsoft 官方描述符, Win10 1903+ 原生支持) */
+                .uuid = &uuid_chr_report.u,
+                .access_cb = report_read_cb,
+                .arg = (void *)(uintptr_t)3,   /* {id, val_lo, val_hi} */
+                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
+                .val_handle = &h_dial_report,
+                .descriptors = (struct ble_gatt_dsc_def[]) {
+                    { .uuid = &uuid_dsc_report_ref.u,
+                      .att_flags = BLE_ATT_F_READ,
+                      .access_cb = report_ref_cb,
+                      .arg = (void *)report_ref_dial },
                     { 0 },
                 },
             },
@@ -377,9 +420,10 @@ static void on_sync(void)
     }
     ble_hs_id_infer_auto(0, &s_own_addr_type);
     /* 句柄注册号: 用于核对 notify/SUBSCRIBE 日志里 att_handle 的归属 */
-    ESP_LOGI(TAG, "report handles: consumer=%u (cccd=%u) mouse=%u (cccd=%u)",
+    ESP_LOGI(TAG, "report handles: consumer=%u (cccd=%u) mouse=%u (cccd=%u) dial=%u (cccd=%u)",
              h_consumer_report, h_consumer_report + 1,
-             h_mouse_report, h_mouse_report + 1);
+             h_mouse_report, h_mouse_report + 1,
+             h_dial_report, h_dial_report + 1);
     adv_start();
     ESP_LOGI(TAG, "BLE HID ready, pairing name: %s", HID_DEV_NAME);
 }
@@ -454,6 +498,33 @@ static uint16_t consumer_usage_to_mask(uint16_t usage)
     case 0xEA: return 1u << 6;   /* Volume Down */
     default:   return 0;
     }
+}
+
+/* ---------------- Surface Dial 报告 (Windows 10 1903+ 原生支持) ----------------
+ * 报告 16 位小端: bit0=按下, bit1..15=相对旋转量(有符号, ±3600=±10圈)
+ * 旋转/按压由 Windows 系统处理 —— 不经 Consumer 页媒体键 */
+
+void blehid_dial_rotate(int steps)
+{
+    if (!s_connected || steps == 0) {
+        return;
+    }
+    if (steps > 7) steps = 7;
+    if (steps < -7) steps = -7;
+    /* bit0=按键位恒 0; bit1..15 = 旋转量(有符号, 左移 1 位嵌入) */
+    uint16_t val = (uint16_t)((steps << 1) & 0xFFFE);
+    uint8_t report[3] = { 10, (uint8_t)(val & 0xFF), (uint8_t)(val >> 8) };
+    notify(h_dial_report, report, 3);
+}
+
+void blehid_dial_button(bool down)
+{
+    if (!s_connected) {
+        return;
+    }
+    uint16_t val = down ? 0x0001 : 0x0000;   /* bit0=按键, 旋转位恒 0 */
+    uint8_t report[3] = { 10, (uint8_t)(val & 0xFF), (uint8_t)(val >> 8) };
+    notify(h_dial_report, report, 3);
 }
 
 void blehid_consumer_send(uint16_t usage)

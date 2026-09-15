@@ -8,12 +8,18 @@ LV_FONT_DECLARE(lv_font_montserrat_26);
 LV_FONT_DECLARE(lv_font_montserrat_48);
 LV_FONT_DECLARE(lv_font_msyh_16);
 
+/* NVS persistence helpers from smartknob_ui.c */
+bool ui_nvs_load_i32(const char *key, int32_t *out);
+bool ui_nvs_save_i32(const char *key, int32_t value);
+
 /* ============================================================
  * S-Dial 电脑控制 (仿 X-Knob Surface Dial)
- * BLE HID 连接电脑, Windows 免驱:
- *   旋转   = 音量加减 / 鼠标滚轮(点按钮切换模式)
- *   点击中 = 播放/暂停
- *   底部   = 上一首 / 下一首
+ * BLE HID 连接电脑, Windows 免驱。两种主机协议 (长按模式键切换):
+ *   Surface Dial 模式 (默认, Win10 1903+ 原生支持):
+ *     旋转 = 系统拨号盘(音量/滚动由 Windows 处理)
+ *     单击中 = 静音切换, 长按中 = 弹系统圆盘菜单 (系统语义)
+ *   媒体键模式 (Android 兼容):
+ *     旋转 = 音量加减 / 鼠标滚轮, 点击 = 播放/暂停, 底部 = 切歌
  * ============================================================ */
 
 typedef enum {
@@ -24,6 +30,7 @@ typedef enum {
 
 typedef struct {
     pc_mode_t mode;
+    bool dial_mode;     /* true=Surface Dial 原生协议(Windows), false=媒体键(兼容) */
     lv_obj_t *label_ble;
     lv_obj_t *btn_mode;
     lv_obj_t *label_mode;
@@ -32,6 +39,20 @@ typedef struct {
     lv_obj_t *btn_prev;
     lv_obj_t *btn_next;
 } pc_data_t;
+
+static void pc_mode_refresh(pc_data_t *d);
+
+static bool pc_dial_mode_get(void)
+{
+    int32_t v = 1;
+    ui_nvs_load_i32("pcdial_dial", &v);
+    return v != 0;
+}
+
+static void pc_dial_mode_save(bool dial)
+{
+    ui_nvs_save_i32("pcdial_dial", dial ? 1 : 0);
+}
 
 static void pc_ble_status_refresh(pc_data_t *d)
 {
@@ -46,10 +67,10 @@ static void pc_ble_status_refresh(pc_data_t *d)
 
 static void pc_mode_refresh(pc_data_t *d)
 {
-    if (d->mode == PC_MODE_VOLUME) {
-        lv_label_set_text(d->label_mode, "\xE6\xA8\xA1\xE5\xBC\x8F\x3A \xE9\x9F\xB3\xE9\x87\x8F");
+    if (d->dial_mode) {
+        lv_label_set_text(d->label_mode, "\xE4\xB8\xBB\xE6\x9C\xBA\x3A \xE8\xA1\xA8\xE7\x9B\x98"); /* 主机: 表盘 */
     } else {
-        lv_label_set_text(d->label_mode, "\xE6\xA8\xA1\xE5\xBC\x8F\x3A \xE6\xBB\x9A\xE8\xBD\xAE");
+        lv_label_set_text(d->label_mode, "\xE4\xB8\xBB\xE6\x9C\xBA\x3A \xE5\xAA\x92\xE4\xBD\x93\xE9\x94\xAE"); /* 主机: 媒体键 */
     }
 }
 
@@ -67,6 +88,11 @@ static void pc_apply_rotate(pc_data_t *d, int32_t steps)
     }
     last_send_tick = now;
 
+    if (d->dial_mode) {
+        /* Surface Dial 原生: 系统拨号盘, 音量/滚动由 Windows 语义处理 */
+        blehid_dial_rotate(steps);
+        return;
+    }
     if (d->mode == PC_MODE_VOLUME) {
         /* Windows 每个音量报告 = 2 格; 单事件最多 2 次 */
         int n = steps > 0 ? steps : -steps;
@@ -81,21 +107,33 @@ static void pc_apply_rotate(pc_data_t *d, int32_t steps)
     }
 }
 
-/* 模式切换按钮 */
+/* 模式切换按钮: 单击=音量/滚轮, 长按=Surface Dial/媒体键(主机协议) */
 static void pc_mode_btn_cb(lv_event_t *e)
 {
     lv_obj_t *obj = lv_event_get_current_target(e);
     page_t *p = (page_t *)lv_obj_get_user_data(obj);
     pc_data_t *d = p->data;
-    d->mode = (d->mode + 1) % PC_MODE_COUNT;
-    pc_mode_refresh(d);
-    pm_shake();
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_LONG_PRESSED) {
+        d->dial_mode = !d->dial_mode;
+        pc_dial_mode_save(d->dial_mode);
+        pc_mode_refresh(d);
+        pm_shake();
+    } else if (code == LV_EVENT_SHORT_CLICKED || code == LV_EVENT_CLICKED) {
+        if (d->dial_mode) {
+            return;   /* 表盘模式下 Windows 管语义, 无需本地模式 */
+        }
+        d->mode = (d->mode + 1) % PC_MODE_COUNT;
+        pc_mode_refresh(d);
+        pm_shake();
+    }
 }
 
-/* 中间播放/暂停 */
+/* 中间播放/暂停 (媒体键模式); Surface Dial 模式下中间按压=系统菜单选择 */
 static void pc_tap_cb(lv_event_t *e)
 {
     (void)e;
+    page_t *p = NULL;
     if (blehid_is_connected()) {
         blehid_consumer_send(HID_CONSUMER_PLAY_PAUSE);
         pm_shake();
@@ -150,6 +188,7 @@ static void pg_pcdial_create(page_t *p)
     pc_data_t *d = calloc(1, sizeof(pc_data_t));
     p->data = d;
     d->mode = PC_MODE_VOLUME;
+    d->dial_mode = pc_dial_mode_get();
     p->title = "S-Dial";
 
     d->label_ble = lv_label_create(p->root);
@@ -191,8 +230,9 @@ static void pg_pcdial_create(page_t *p)
     lv_obj_t *hint = lv_label_create(p->root);
     lv_obj_set_style_text_color(hint, lv_color_hex(XK_COLOR_FAINT), 0);
     lv_obj_set_style_text_font(hint, &lv_font_msyh_16, 0);
-    lv_label_set_text(hint, "\xE8\x93\x9D\xE7\x89\x99\xE8\xAE\xBE\xE7\xBD\xAE\xE4\xB8\xAD\xE6\x90\x9C\xE7\xB4\xA2 SmartKnob");
-    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -8);
+    lv_label_set_text(hint, "\xE8\x93\x9D\xE7\x89\x99\xE8\xAE\xBE\xE7\xBD\xAE\xE4\xB8\xAD\xE6\x90\x9C\xE7\xB4\xA2 SmartKnob"
+                             "\n\xE9\x95\xBF\xE6\x8C\x89\xE6\xA8\xA1\xE5\xBC\x8F\xE9\x94\xAE\xE5\x88\x87\xE6\x8D\xA2\xE4\xB8\xBB\xE6\x9C\xBA\xE5\x8D\x8F\xE8\xAE\xAE"); /* 长按模式键切换主机协议 */
+    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -4);
 
     lv_obj_remove_flag(p->root, LV_OBJ_FLAG_SCROLLABLE);
     /* 棘轮手感: 旋转一格一咔哒(齿轮感), 一格=一次音量/滚轮动作 */
