@@ -43,25 +43,31 @@ static const uint8_t s_report_map[] = {
     0x81, 0x06,                     /*     Input (Data, Var, Rel) */
     0xC0, 0xC0,                     /*   End Collection x2 */
     /* Consumer Control
-     * 行业标准 16 位位图形式: 每用法占 1 位, 报文 [ID, 位图低字节, 位图高字节]
+     * 逐位独立 Input 字段形式 (Nordic HID 键盘/媒体键示例同款):
+     * 每个用法单独声明 1 位字段, 报文 [ID, 位图lo, 位图hi]
      * 音量上=bit5 音量下=bit6 媒体/静音/扫描=bit0-4.
-     * 历史: 16bit usage 值槽(LogicalMax 1023)与 8bit 数组(UsageMax 255)
-     * 两种写法 Android 可解析, Windows 的 HID 类驱动建出设备但不消费输入
-     * (连接/订阅/通知全成功却无动作) —— 位图形式是 Windows 免疫的关键 */
+     * 历史: 16bit usage 值槽与 8bit 数组两种写法 Android 可解析,
+     * Windows 建出设备但不消费输入; 位图+逐位字段是 Windows 最稳形式 */
     0x05, 0x0C,                     /* Usage Page (Consumer) */
     0x09, 0x01,                     /* Usage (Consumer Control) */
     0xA1, 0x01,                     /* Collection (Application) */
     0x85, 0x01,                     /*   Report ID (1) */
-    0x75, 0x01, 0x95, 0x07,         /*   Size 1, Count 7 */
     0x15, 0x00, 0x25, 0x01,         /*   Logical 0..1 */
+    0x75, 0x01, 0x95, 0x01,         /*   Size 1, Count 1 */
     0x09, 0xB5,                     /*   Usage (Scan Next)   bit0 */
-    0x09, 0xB6,                     /*   Usage (Scan Prev)   bit1 */
-    0x09, 0xB7,                     /*   Usage (Stop)        bit2 */
-    0x09, 0xCD,                     /*   Usage (Play/Pause)  bit3 */
-    0x09, 0xE2,                     /*   Usage (Mute)        bit4 */
-    0x09, 0xE9,                     /*   Usage (Volume Up)   bit5 */
-    0x09, 0xEA,                     /*   Usage (Volume Down) bit6 */
     0x81, 0x02,                     /*   Input (Data, Var, Abs) */
+    0x09, 0xB6,                     /*   Usage (Scan Prev)   bit1 */
+    0x81, 0x02,                     /*   Input */
+    0x09, 0xB7,                     /*   Usage (Stop)        bit2 */
+    0x81, 0x02,                     /*   Input */
+    0x09, 0xCD,                     /*   Usage (Play/Pause)  bit3 */
+    0x81, 0x02,                     /*   Input */
+    0x09, 0xE2,                     /*   Usage (Mute)        bit4 */
+    0x81, 0x02,                     /*   Input */
+    0x09, 0xE9,                     /*   Usage (Volume Up)   bit5 */
+    0x81, 0x02,                     /*   Input */
+    0x09, 0xEA,                     /*   Usage (Volume Down) bit6 */
+    0x81, 0x02,                     /*   Input */
     0x75, 0x01, 0x95, 0x09,         /*   Size 1, Count 9 */
     0x81, 0x03,                     /*   Input (Const, Var, Abs) 补齐 16 位 */
     0xC0,
