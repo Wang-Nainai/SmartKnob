@@ -18,9 +18,10 @@
 #define TASK_ARRAY_MAX   SYSMON_MAX_TASKS
 #define SAMPLE_PERIOD_MS 1000
 /* uxTaskGetSystemState 挂起双核调度并逐任务扫描栈水印, 多任务+coex 场景
- * 下长时间占用双核 spinlock (实测触发 IWDT panic 重启) —— 每 N 轮才重扫描
- * 一次, 其余轮次复用上一轮任务表渲染 */
-#define TASK_SCAN_DIV    5
+ * 下长时间占用双核 spinlock —— 重扫描降频到每 3s 一次 (IWDT 已加宽到
+ * 900ms 兜底; 1s 太密曾触发 IWDT panic, 5s 又太慢), 其余轮次复用上一轮
+ * 任务表渲染 */
+#define TASK_SCAN_DIV    3
 
 typedef struct {
     TaskHandle_t handle;
