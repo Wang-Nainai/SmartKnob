@@ -123,6 +123,10 @@ void display_notify_activity(void)
         bl_set_duty(s_brightness_pct);
     }
     if (s_screen_timeout_sec > 0 && s_off_timer) {
+        /* esp_timer_start_once 对运行中的 timer 返回 ESP_ERR_INVALID_STATE
+         * 且不重启倒计时 —— 不先 stop 的话, 开机启动的那次倒计时会一直
+         * 计到头 (表现为"设置 2 分钟实际很快熄屏") */
+        esp_timer_stop(s_off_timer);
         esp_timer_start_once(s_off_timer, (uint64_t)s_screen_timeout_sec * 1000000ULL);
     }
 }

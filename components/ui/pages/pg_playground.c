@@ -126,17 +126,21 @@ static void pg_refresh_fill(pg_data_t *d, int32_t pos)
     int32_t end = d->win_deg0 + (int32_t)(((int64_t)v * d->win_span) / vmax);
     lv_arc_set_angles(d->range_arc, d->win_deg0, end);
 
-    /* 红弧: 位置停在边界档 且 档内偏移朝界外 才算越界, 幅值封顶 30° */
+    /* 红弧: 位置停在边界档 且 档内偏移朝界外, 幅值封顶 60°、
+     * 最短可视 20° (端点制动拉回下实际越界角只有 10-30°, 原封顶 30°
+     * 且无下限导致"很短一截"几乎不可见) */
     int32_t o = (int32_t)off;
-    if (o > 30) o = 30;
-    if (o < -30) o = -30;
+    if (o > 60) o = 60;
+    if (o < -60) o = -60;
     bool oob_min = (pos <= d->win_min && o > 0);
     bool oob_max = (pos >= d->win_max && o < 0);
     if (oob_min) {
-        lv_arc_set_angles(d->red_arc, d->win_deg0 - o, d->win_deg0);
+        int32_t shown = (o < 20) ? 20 : o;
+        lv_arc_set_angles(d->red_arc, d->win_deg0 - shown, d->win_deg0);
     } else if (oob_max) {
+        int32_t shown = (o > -20) ? -20 : o;
         lv_arc_set_angles(d->red_arc, d->win_deg0 + d->win_span,
-                          d->win_deg0 + d->win_span - o);
+                          d->win_deg0 + d->win_span - shown);
     } else {
         lv_arc_set_angles(d->red_arc, 0, 0);
     }

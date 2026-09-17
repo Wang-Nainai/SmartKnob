@@ -341,8 +341,9 @@ static void pg_pcdial_create(page_t *p)
     lv_obj_t *hint = lv_label_create(p->root);
     lv_obj_set_style_text_color(hint, lv_color_hex(XK_COLOR_FAINT), 0);
     lv_obj_set_style_text_font(hint, &lv_font_msyh_16, 0);
-    lv_label_set_text(hint, "\xE8\x93\x9D\xE7\x89\x99\xE6\x90\x9C\xE7\xB4\xA2 SmartKnob\x20\xE9\x85\x8D\xE5\xAF\xB9"
-                             "\n\xE5\x8D\x95\xE5\x87\xBB\xE5\x88\x87\xE6\xA8\xA1\xE5\xBC\x8F\x20\xE9\x95\xBF\xE6\x8C\x89\xE4\xB8\xAD\xE5\xA4\xAE\x3D\xE8\x8F\x9C\xE5\x8D\x95"); /* 蓝牙搜索 SmartKnob 配对 / 单击切模式 长按中央=菜单 */
+    /* 底部只够一行: 配对引导是首次使用最需要的信息,
+     * 模式切换由模式键自身标签展示 (单击循环即可见) */
+    lv_label_set_text(hint, "\xE7\x94\xB5\xE8\x84\x91\xE8\x93\x9D\xE7\x89\x99\xE6\x90\x9C\xE7\xB4\xA2 SmartKnob"); /* 电脑蓝牙搜索 SmartKnob */
     lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -4);
 
     lv_obj_remove_flag(p->root, LV_OBJ_FLAG_SCROLLABLE);

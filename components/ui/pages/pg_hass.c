@@ -601,7 +601,7 @@ static void pg_hass_create(page_t *p)
     d->label_hint = hint;
     lv_obj_set_style_text_color(hint, lv_color_hex(XK_COLOR_FAINT), 0);
     lv_obj_set_style_text_font(hint, &lv_font_msyh_16, 0);
-    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -10);
+    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -4);   /* 再往下一点: -10 时与圆盘底部间距过大 */
 
     for (int i = 0; i < d->num; i++) {
         d->ac_temp[i] = 26;

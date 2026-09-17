@@ -79,7 +79,10 @@ esp_err_t scd40_init(void)
     };
     ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(s_bus, &dev_cfg, &s_dev), TAG, "add SCD40 device failed");
 
-    vTaskDelay(pdMS_TO_TICKS(20));
+    /* SCD4x datasheet: 上电后需等待 >=1000ms 才能接受 start_periodic,
+     * 20ms 就下发 start 会被静默忽略 (表现为持续 not ready, 只能靠 60s
+     * 自愈循环拉回来) */
+    vTaskDelay(pdMS_TO_TICKS(1000));
     scd40_scan_bus();
     return ESP_OK;
 }
