@@ -275,12 +275,12 @@ static void pg_playground_create(page_t *p)
     lv_obj_set_style_radius(d->dot, LV_RADIUS_CIRCLE, 0);
     lv_obj_clear_flag(d->dot, LV_OBJ_FLAG_CLICKABLE);
 
-    /* 中央大数值 */
+    /* 中央大数值 (表盘正中央) */
     d->label_value = lv_label_create(p->root);
     lv_obj_set_style_text_color(d->label_value, lv_color_hex(XK_COLOR_TEXT), 0);
     lv_obj_set_style_text_font(d->label_value, &lv_font_montserrat_48, 0);
     lv_label_set_text(d->label_value, "0");
-    lv_obj_align(d->label_value, LV_ALIGN_CENTER, 0, -8);
+    lv_obj_align(d->label_value, LV_ALIGN_CENTER, 0, 0);
 
     pg_apply_mode(d);
     d->timer = lv_timer_create(pg_playground_timer, 50, d);

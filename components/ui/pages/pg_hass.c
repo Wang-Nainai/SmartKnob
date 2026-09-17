@@ -593,7 +593,8 @@ static void pg_hass_create(page_t *p)
     d->label_name = name;
     lv_obj_set_style_text_color(name, lv_color_hex(XK_COLOR_GRAY), 0);
     lv_obj_set_style_text_font(name, &lv_font_msyh_16, 0);
-    lv_obj_align(name, LV_ALIGN_TOP_MID, 0, 34);
+    /* 顶部设备名 (y=28: 与表盘顶 y=66 保持 16px 间距, 34 时仅 10px 贴边) */
+    lv_obj_align(name, LV_ALIGN_TOP_MID, 0, 28);
 
     /* 底部操作提示 (按设备变化, 在 hass_ctrl_visual 中更新) */
     lv_obj_t *hint = lv_label_create(d->ctrl_scr);
