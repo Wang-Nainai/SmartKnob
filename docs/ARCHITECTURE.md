@@ -506,46 +506,42 @@ MQTT
 
 ## 9. LVGL Memory Strategy
 
-### 9.1 设计意图
+### 9.1 当前生效状态（CUR-001 已修复，2026-09）
 
-项目目标是使用 libc malloc，并利用 ESP32-S3 的 8 MB PSRAM，避免恢复早已废弃的 64 KB LVGL builtin memory pool。
+LVGL 使用 libc malloc，对象分配经 `malloc()` 落入 ESP32-S3 的 8 MB PSRAM
+（`CONFIG_SPIRAM_USE_MALLOC=y` + `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0`
+使大于阈值(默认 16KB→0)的分配优先 PSRAM），不再受 64 KB builtin pool 限制。
 
-目标配置为：
-
-```text
-CONFIG_LV_USE_STDLIB_MALLOC=1
-CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0
-```
-
-`main/Kconfig.projbuild` 额外声明了一个整数符号 `LV_USE_STDLIB_MALLOC`，意图让 LVGL 使用 CLIB malloc。
-
-### 9.2 当前实际生效状态
-
-当前生成的 `build/config/sdkconfig.h` 同时存在：
+当前生效配置链（代码验证）：
 
 ```text
-CONFIG_LV_USE_STDLIB_MALLOC 1
-CONFIG_LV_USE_BUILTIN_MALLOC 1
-CONFIG_LV_USE_CLIB_MALLOC 未设置
-CONFIG_LV_MEM_SIZE_KILOBYTES 64
+sdkconfig:                CONFIG_LV_USE_CLIB_MALLOC=y
+  ↓ choice（三选一，无 builtin）
+build/config/sdkconfig.h: 只有 CONFIG_LV_USE_CLIB_MALLOC 1
+                          （CONFIG_LV_USE_BUILTIN_MALLOC 与
+                           LV_MEM_SIZE_KILOBYTES 已被 regen 清理）
+  ↓
+src/lv_conf_kconfig.h:    CLIB 分支 → CONFIG_LV_USE_STDLIB_MALLOC = LV_STDLIB_CLIB
 ```
 
-LVGL 9.2.0 的 `src/lv_conf_kconfig.h` 优先根据 `CONFIG_LV_USE_BUILTIN_MALLOC` 定义：
+历史冲突说明：旧版本曾用 `main/Kconfig.projbuild` 补 int 符号
+`LV_USE_STDLIB_MALLOC=1`，但 `lv_conf_kconfig.h` 按 builtin 分支覆盖，
+实际始终 builtin 64 KB（CUR-001）。现已删除 int 补丁符号，直接使用
+组件 Kconfig 的 malloc choice；该文件仅保留历史注释。
 
-```text
-CONFIG_LV_USE_STDLIB_MALLOC LV_STDLIB_BUILTIN
-```
+### 9.2 运行时验证状态
 
-因此当前工程虽然保留了 `CONFIG_LV_USE_STDLIB_MALLOC=1`，但该整数符号会被 Kconfig 映射覆盖，实际生效仍是 builtin 64 KB allocator。这是一个未解决的配置冲突，不能把它记录为已完成修复。
-
-正确修复方向是让 LVGL memory choice 实际选择 `LV_USE_CLIB_MALLOC`，并移除冲突的内置池选择；在修复和重新验证前，不得声称 LVGL 对象已经全部落到 PSRAM。
+- 编译验证：redefined 警告消失，bin 尺寸变化符合 builtin 池移除预期。
+- 运行验证（硬件待确认）：页面叠加场景不再出现 64 KB 池 OOM 死循环；
+  `LV_USE_MEM_MONITOR`（builtin 专用）当前无意义，勿依据它判断。
 
 ### 9.3 禁止回退
 
-- 不恢复 LVGL builtin 64 KB pool 作为正式内存策略。
+- 不恢复 LVGL builtin 64 KB pool 作为正式内存策略（勿在 menuconfig 里
+  把 malloc choice 切回 "LVGL's built in implementation"）。
 - 不删除 heap poisoning 来掩盖 heap corruption。
-- 不因为 `CONFIG_LV_MEM_SIZE_KILOBYTES=64` 存在于文件里，就把 builtin pool 当成当前正确方案。
-- 不把 `CONFIG_LV_USE_STDLIB_MALLOC=1` 单独视为 CLIB 已生效的充分条件。
+- 不把任何 int 型 `LV_USE_STDLIB_MALLOC` 补丁符号加回 Kconfig —— choice
+  才是唯一生效开关（CUR-001 教训）。
 
 当前 `CONFIG_HEAP_POISONING_COMPREHENSIVE=y` 是长期启用的内存踩踏检测措施，不是临时调试开关。出现 heap corruption 时必须分析生命周期、重复释放、越界写、callback、PSRAM 和 LVGL 异步对象，不得直接关闭 poisoning。
 
@@ -576,11 +572,26 @@ CONFIG_LV_USE_STDLIB_MALLOC LV_STDLIB_BUILTIN
 
 禁止把 `ui_label_roll` 改回 create -> animate -> delete 的循环。历史实测表明，在动画 ready 回调中删除仍有动画关联的 LVGL 对象可能导致动画链表破坏和堆损坏。
 
-### 10.2 当前页面删除风险
+### 10.2 页面删除（CUR-003 已彻底修复）
 
-`page_mgr` 的 `pm_pop_anim_done()` 目前仍在 LVGL animation ready 回调中调用 `pm_delete_page()`，进而删除页面根对象。这与硬约束“不要在动画回调中删除 LVGL 对象”存在直接冲突。
+`page_mgr` 的 pop 删除路径已完全异步化：
 
-该行为不等同于 `ui_label_roll` 的幽灵标签删除问题，但应视为高风险区域。本次文档同步不修改代码；后续修复前必须单独分析 LVGL 动画链表、页面栈和回调时机。
+```text
+pop 动画 ready 回调（pm_pop_anim_done）
+  ↓ 仅摘出栈顶引用、结束 pm_animating
+lv_async_call(pm_pop_finish_cb, p)
+  ↓ 下一拍执行（动画链表已完全处理完）
+pm_delete_page（先删对象树 → 后释放页面数据，已核对 12 个页面 destroy
+  均不访问 p->root）
+  ↓
+恢复新栈顶页面 on_resume + knob_input_reset
+```
+
+防回退要点：
+- pop 删除路径的 async 化不可回退 —— 在动画 ready 回调中直接删除对象与
+  `ui_label_roll` 幽灵标签的历史堆损坏教训同源（LVGL 动画链表破坏）。
+- 页面回调以 `LV_EVENT_ALL` 注册时必须拦截 `LV_EVENT_DELETE`（删除树广播）。
+- `pm_replace`（startup→menu/tcal）保留同步删除，该场景无用户交互。
 
 ---
 
@@ -749,6 +760,11 @@ STA 启动
 SoftAP 默认访问地址是 `192.168.4.1`。`pg_apcfg` 可以手动关闭提示页，但热点会保留到 STA 配网成功。
 
 AP 启动前会检查 internal largest free block；小于 24 KB 时拒绝启动热点，避免闭源 WiFi 库内存分配失败崩溃。
+
+APSTA 切换窗口（BUG-033）：`s_ap_switching` 置位期间，事件任务的
+DISCONNECTED 回调**不执行** `esp_wifi_connect()`，避免重连与
+`set_mode(APSTA)` 在闭源库内并发 panic；切换完成（或任一回滚路径）清标志
+并显式恢复重连。该门控不可删除。
 
 ---
 
@@ -1200,9 +1216,14 @@ powershell -File tools\build.ps1 build
 ## 23. 当前文档与代码冲突摘要
 
 1. 实际 CPU 配置是 160 MHz，旧基线写 240 MHz。
-2. `CONFIG_LV_USE_STDLIB_MALLOC=1` 当前没有让 CLIB 生效，实际被 builtin choice 覆盖（CUR-001，未修复）。
+2. LVGL malloc choice 已切 CLIB，对象分配经 libc 落 PSRAM（CUR-001 已修复，
+   编译层验证生效；运行时页面叠加场景待烧录确认）。
 3. Web `/api/envhist` 已改为 60 秒间隔（CUR-002 已修复，iv_s=60 与日级缓冲一致）。
-4. page_mgr 的 pop 动画 ready 回调删除页面对象形态仍在（CUR-003）：已把 `pm_delete_page` 改为"先删对象树后释放数据"缓解（DELETE 事件期间数据有效），彻底重构待做。
+4. page_mgr 的 pop 删除路径已异步化（CUR-003 已彻底修复：动画 ready 回调摘出，
+   `lv_async_call` 下一拍删页，见 §10.2）。
 5. `pg_setting` 重新校准路径的 600 ms 阻塞已改为非阻塞定时器重启（CUR-004 已修复）。
-6. `README.md` 仍包含旧 PSRAM、SPI 时钟、模式数量和依赖描述（CUR-006，未更新）。
-7. BLE HID Surface Dial 的 Windows 实测回归（旋转/按键/菜单/重配对）已有阶段性实机反馈：旋转、上一首/下一首、切歌模式已验证可用；播放暂停（表盘模式短按补发媒体键）与长按系统菜单需继续实测。
+6. `README.md` 已重写为开源版本（CUR-006 已解决）；`docs/` 两份文档与代码同步。
+7. BLE HID Surface Dial 的 Windows 实测回归已有阶段性实机反馈：旋转、上一首/
+   下一首、切歌模式已验证可用；播放暂停与长按系统菜单需继续实测。
+8. 已记录不修的低危项见 docs/BUGS.md BUG-037（env_hist 单写多读、display 熄屏
+   双任务竞态——均有自愈或影响有限）。

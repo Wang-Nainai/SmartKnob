@@ -615,7 +615,13 @@ static void motor_task(void *pvParameters)
         if (!motor_control_enabled) {
             /* 急停状态: loopFOC 已执行, 但不施加任何目标力矩 */
         } else if (shake_state != SHAKE_IDLE) {
-            if (shake_remaining > 0) {
+            /* 用户在脉冲期间快转: 立即中止, 与 start_shake 的高速抑制
+             * 语义一致, 避免持续对抗手感 (速度门控此前只在启动时判一次) */
+            if (fabsf(motor.shaft_velocity) > 15.0f) {
+                shake_state = SHAKE_IDLE;
+                shake_active = false;
+                motor.move(0);
+            } else if (shake_remaining > 0) {
                 shake_remaining--;
             } else {
                 if (shake_state == SHAKE_POS) {

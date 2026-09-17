@@ -4,7 +4,9 @@
 
 static const char *TAG = "app_state";
 
-/* 跨任务只读快照: 单字对齐访问, Xtensa 上原子, 由 scd40 任务写入 */
+/* 跨任务只读快照: scd40 任务写, UI/MQTT/Web 多任务读。
+ * 单字段原子, 但四字段组合读需要临界区防"新 CO2 + 旧温湿度"撕裂 */
+static portMUX_TYPE s_env_mux = portMUX_INITIALIZER_UNLOCKED;
 static volatile uint16_t s_co2 = 0;
 static volatile float s_temp = 0.0f;
 static volatile float s_rh = 0.0f;
@@ -22,10 +24,12 @@ esp_err_t app_state_init(void)
 
 void app_state_set_env(uint16_t co2_ppm, float temperature_c, float humidity_pct)
 {
+    portENTER_CRITICAL(&s_env_mux);
     s_co2 = co2_ppm;
     s_temp = temperature_c;
     s_rh = humidity_pct;
     s_has_data = true;
+    portEXIT_CRITICAL(&s_env_mux);
 }
 
 void app_state_get_env(app_env_t *env)
@@ -33,10 +37,12 @@ void app_state_get_env(app_env_t *env)
     if (!env) {
         return;
     }
+    portENTER_CRITICAL(&s_env_mux);
     env->co2_ppm = s_co2;
     env->temperature_c = s_temp;
     env->humidity_pct = s_rh;
     env->has_data = s_has_data;
+    portEXIT_CRITICAL(&s_env_mux);
 }
 
 /* ---- WiFi / AP 状态 ---- */

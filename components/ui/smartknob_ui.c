@@ -187,10 +187,9 @@ static void pm_old_parallax_done(lv_anim_t *a)
     lv_obj_set_x((lv_obj_t *)a->var, 0);
 }
 
-static void pm_pop_anim_done(lv_anim_t *a)
+static void pm_pop_finish_cb(void *arg)
 {
-    page_t *p = (page_t *)a->user_data;
-    pm_animating = false;
+    page_t *p = (page_t *)arg;
     pm_delete_page(p);
 
     /* 恢复新栈顶页面的可见状态(如电机手感模式), 并同步旋钮基准 */
@@ -199,6 +198,16 @@ static void pm_pop_anim_done(lv_anim_t *a)
         top->ops->on_resume(top);
     }
     knob_input_reset();
+}
+
+static void pm_pop_anim_done(lv_anim_t *a)
+{
+    page_t *p = (page_t *)a->user_data;
+    pm_animating = false;
+    /* CUR-003 彻底修复: 动画 ready 回调里不再直接删除页面对象 ——
+     * 摘到下一拍(lv_async_call)执行, 回调返回时 pop 动画的链表/内存
+     * 已完全处理完, 与 ui_label_roll 幽灵标签的历史堆损坏教训同源 */
+    lv_async_call(pm_pop_finish_cb, p);
 }
 
 static page_t *pm_create_page(page_id_t id)

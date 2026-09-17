@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <ctype.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "mqtt_client.h"
@@ -186,7 +187,13 @@ static void handle_cmnd(const char *topic, int topic_len, const char *data, int 
         motor_set_mode((motor_mode_t)m, 0, 0);
         ESP_LOGI(TAG, "cmnd: mode=%d", m);
     } else if (sub_len == 3 && !strncmp(sub, "led", 3)) {
-        if (strlen(arg) == 6) {
+        bool hex_ok = strlen(arg) == 6;
+        for (int i = 0; hex_ok && i < 6; i++) {
+            if (!isxdigit((unsigned char)arg[i])) {
+                hex_ok = false;   /* 非 hex 字符: strtol 静默置 0 会黑灯 */
+            }
+        }
+        if (hex_ok) {
             char hex[3] = {0};
             hex[0] = arg[0]; hex[1] = arg[1];
             int r = (int)strtol(hex, NULL, 16);
@@ -196,6 +203,8 @@ static void handle_cmnd(const char *topic, int topic_len, const char *data, int 
             int b = (int)strtol(hex, NULL, 16);
             led_set_color(r, g, b);
             ESP_LOGI(TAG, "cmnd: led=%02X%02X%02X", r, g, b);
+        } else {
+            ESP_LOGW(TAG, "cmnd: led payload invalid, expected RRGGBB");
         }
     }
 }
@@ -250,6 +259,13 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         break;
     case MQTT_EVENT_DATA:
         if (event->topic && event->topic_len > 0) {
+            /* 分片消息(超长 payload)只交付首片: 短命令不应分片,
+             * 分片即异常 payload —— 丢弃而不是解析半截数据 */
+            if (event->total_data_len > 0 && event->data_len != event->total_data_len) {
+                ESP_LOGW(TAG, "cmnd payload fragmented (%d/%d), dropped",
+                         event->data_len, event->total_data_len);
+                break;
+            }
             handle_cmnd(event->topic, event->topic_len, event->data, event->data_len);
         }
         break;

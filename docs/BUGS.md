@@ -258,27 +258,78 @@
 - 修复方式：改为记录日志（模式切换时序敏感，下次断线流程自愈）。
 - 当前状态：已修复。
 
+## BUG-033（Baseline）wifi APSTA 切换与断线重连竞态（eb alloc fail panic 风险）
+
+- 现象：`wifi_ap_fallback_start` 先 `esp_wifi_disconnect()` 再延迟 300ms 切
+  `set_mode(APSTA)`；期间事件任务的 DISCONNECTED 回调可能再次 `esp_wifi_connect()`，
+  与 set_mode 在闭源 WiFi 库内并发（实测 ieee80211_hostap_attach panic）。
+- 修复方式：新增 `s_ap_switching` 门控 —— 切换窗口内 DISCONNECTED 事件跳过
+  `esp_wifi_connect()`（推迟到 APSTA 布局完成后的 STA_START 事件或显式 connect）；
+  三条回滚/成功路径统一清标志并恢复重连。
+- 当前状态：已修复。防回退：DISCONNECTED 里的 connect 门控不可删除。
+
+## BUG-034（Baseline）motor shake 脉冲执行期间无速度门控
+
+- 现象：高速抑制只在 `start_shake` 启动时判一次；正/负脉冲期间用户急转，
+  电机持续施加脉冲力矩，产生对抗手感。
+- 修复方式：shake 状态机每周期检查 `|shaft_velocity| > 15 rad/s`，超限立即
+  清状态并 `move(0)`，与启动时抑制语义一致。
+- 当前状态：已修复。
+
+## BUG-035（Baseline）MQTT 下行命令分片被解析成半截数据 / led 载荷无 hex 校验
+
+- 现象：超长 payload 被 esp-mqtt 分片交付时只取首片，`atoi` 解析半截数据；
+  `led` 命令长度 6 但含非 hex 字符时 `strtol` 静默置 0（黑灯）。
+- 修复方式：DATA 事件 `data_len != total_data_len` 时丢弃并告警（短命令不应
+  分片）；led 载荷逐字符 `isxdigit` 校验，非法时拒绝并告警。
+- 当前状态：已修复。
+
+## BUG-036（Baseline）app_state 环境快照四字段组合撕裂
+
+- 现象：`app_state_get_env` 四字段无锁读取，可能取到"新 CO2 + 旧温湿度"的
+  撕裂组合（单字段原子、组合非原子）。
+- 修复方式：`set_env`/`get_env` 加轻量 portMUX 临界区（纯赋值，无阻塞调用）。
+- 当前状态：已修复。
+
+## BUG-037（信息）env_hist 单写多读无锁、display 熄屏双任务 check-then-act
+
+- 两处均为低危（历史曲线瞬时错位 / 下次触摸自愈），记录不修：
+  env_hist 读者为 UI/HTTP，撕裂只影响个别数据点；display 熄屏竞态的残留
+  窗口会被下一次触摸/旋转的 notify_activity 自愈。
+
 ---
 
 # 当前静态分析发现
 
-## CUR-001 当前 LVGL 仍实际使用 builtin 64 KB allocator（未修复）
+## CUR-001 当前 LVGL 仍实际使用 builtin 64 KB allocator（已修复）
 
-- 证据：构建产物同时存在 `CONFIG_LV_USE_STDLIB_MALLOC=1` 和 `CONFIG_LV_USE_BUILTIN_MALLOC=1`。
-- 原因：LVGL 9.2 的 `lv_conf_kconfig.h` 先根据 `CONFIG_LV_USE_BUILTIN_MALLOC` 把 `CONFIG_LV_USE_STDLIB_MALLOC` 定义为 `LV_STDLIB_BUILTIN`。
-- 影响：设计中的 CLIB + PSRAM 迁移没有生效；LVGL 对象分配仍受 64 KB builtin pool 限制。
-- 状态：当前风险。需要单独修复配置并重新验证，不能直接宣称已解决。
+- 历史：`sdkconfig` 里项目补丁 int 符号 `LV_USE_STDLIB_MALLOC=1` 与 LVGL 组件
+  Kconfig choice（默认 `LV_USE_BUILTIN_MALLOC=y`）冲突，`lv_conf_kconfig.h`
+  按 builtin 分支覆盖符号，实际生效 builtin 64KB 固定池。
+- 修复方式：sdkconfig 中直接把 Memory Settings choice 切到
+  `CONFIG_LV_USE_CLIB_MALLOC=y`（放弃 int 补丁符号，删除
+  `main/Kconfig.projbuild` 的历史补丁段），配合既有
+  `SPIRAM_MALLOC_ALWAYSINTERNAL=0` 大块分配落 PSRAM。
+- 验证（静态全链）：sdkconfig → sdkconfig.h 仅存 `CONFIG_LV_USE_CLIB_MALLOC 1`
+  → `lv_conf_kconfig.h` 走 CLIB 分支 → `LV_STDLIB_CLIB`；redefined 警告消失；
+  `LV_MEM_SIZE_KILOBYTES` 已被 regen 清理。运行时行为待烧录后以页面叠加
+  场景确认（64KB 池 OOM 死循环不再出现）。
 
 ## CUR-002 Web 环境历史时间轴间隔错误（已修复）
 
 - 历史：`/api/envhist` 返回 `"iv_s":300`，日级缓冲实际 60 秒/点，浏览器时间轴错 5 倍。
 - 当前状态：已修复；`webcfg.c` 返回 `iv_s:60`，前端 `ED.iv_s||60` 兜底与真实间隔一致。
 
-## CUR-003 page pop 在动画 ready 回调中删除页面（已缓解，形态保留）
+## CUR-003 page pop 在动画 ready 回调中删除页面（已彻底修复）
 
 - 证据：`pm_pop_anim_done()` 删除页面并释放页面数据。
-- 2026-09 缓解：`pm_delete_page` 顺序改为"先删对象树后释放数据"——`LV_EVENT_DELETE` 广播期间页面数据仍有效，页面回调（含 filter=ALL）可安全读取；回调业务操作由事件码拦截（BUG-025）。
-- 状态：形态保留，彻底重构（不在动画回调中删页）待做；S-Dial 的实际爆发已消除。
+- 2026-09 第一阶段缓解：`pm_delete_page` 顺序改为"先删对象树后释放数据"——`LV_EVENT_DELETE` 广播期间页面数据仍有效，页面回调（含 filter=ALL）可安全读取；回调业务操作由事件码拦截（BUG-025）。
+- 2026-09 彻底修复：`pm_pop_anim_done` 不再在动画回调中删页，改为
+  `lv_async_call(pm_pop_finish_cb, p)` 下一拍执行（回调返回时动画链表已完全
+  处理完）；on_resume 与 knob_input_reset 一并移入 async 完成回调，删除完成
+  后再恢复栈顶页面。`pm_replace` 的同步删除保留（startup 场景无用户交互）。
+- 状态：已修复。防回退：pop 删除路径的 async 化不可回退；`ui_label_roll`
+  幽灵标签同源教训（动画回调删对象破坏 LVGL 动画链表）见 ARCHITECTURE.md §10。
 
 ## CUR-004 设置页重新校准在 LVGL 回调中阻塞 600 ms（已修复）
 
@@ -289,10 +340,11 @@
 - 历史：`pg_menu.c` 曾写"11 种手感模式"，而实际为 12；新增 `MOTOR_MODE_ADJUSTER` 后为 13。
 - 当前状态：已解决；`pg_menu` 副标题已更新为 13，与 `motor_get_mode_count()` 一致。
 
-## CUR-006 `README.md` 与当前代码不一致（未更新）
+## CUR-006 `README.md` 与当前代码不一致（已解决）
 
-- 证据：README 仍写 PSRAM 未启用、SPI 20 MHz、11 种模式和旧依赖；本系列又新增 S-Dial 模式循环等未入 README。
-- 状态：README 需要单独更新。
+- 历史：README 曾写 PSRAM 未启用、SPI 20 MHz、11 种模式和旧依赖。
+- 当前状态：已解决；README 已重写为开源版本（含 GPL-3.0、致谢合规标注、
+  构建说明与 -IdfPath 用法），并随仓库发布。
 
 ## CUR-007 Motor 命令入队存在最多 20 ms 有界等待
 
@@ -317,7 +369,7 @@
 10. 字库生成和校验必须与源码文案同步。
 11. 触摸总线异常不能造成幽灵点击。
 12. 不关闭 comprehensive heap poisoning 来掩盖越界或 heap corruption。
-13. 不把 `CONFIG_LV_USE_STDLIB_MALLOC=1` 单独当成 CLIB 已生效的证据。
+13. 不把 `CONFIG_LV_USE_STDLIB_MALLOC=1` 单独当成 CLIB 已生效的证据（该 int 符号已被删除，choice 才是生效开关——见 CUR-001）。
 14. 不把代码存在或编译通过写成硬件已验证。
 15. 不把 Web 恢复出厂描述成全 NVS 擦除；它当前只清 `webcfg`。
 16. 环境历史当前使用固定间隔推时间，没有每个样本的绝对时间戳；新增 API 前不得假装已有真实时间戳。
@@ -329,6 +381,13 @@
 22. esp_timer 回调访问共享资源用 try-take 锁，不阻塞（BUG-029）。
 23. `pm_delete_page` 顺序保持"先删对象树后释放数据"，页面 destroy 不得访问 `p->root`。
 24. 传感器自愈计数覆盖总线错误路径（BUG-028）。
+25. pop 删除必须走 `lv_async_call` 异步化（CUR-003/BUG-025），禁止在动画 ready 回调直接删页。
+26. LVGL 分配器只用组件 Kconfig 的 malloc choice（当前 CLIB=y）；禁止恢复 int 型
+    `LV_USE_STDLIB_MALLOC` 补丁符号或 builtin 池（CUR-001）。
+27. APSTA 切换窗口内的 DISCONNECTED 不执行 `esp_wifi_connect()`（BUG-033 门控）。
+28. motor shake 状态机每周期执行速度门控，与启动抑制语义一致（BUG-034）。
+29. MQTT 下行命令先校验分片与载荷合法性再解析（BUG-035）。
+30. 跨任务快照的组合读（多字段）必须用临界区保护写入与读取（BUG-036）。
 
 ---
 
