@@ -24,8 +24,10 @@
 - 原因：`lv_obj_set_style_clip_corner(scale, true)` 可能申请约 240 x 240 RGB565 层缓冲，约 112 KB；旧 LVGL heap 只有 64 KB，分配失败后在 draw layer 队列中反复重试。
 - 归属：UI / Display / LVGL 配置。
 - 历史修复：删除相关页面的 `clip_corner`，取消层缓冲需求。
-- 当前状态：部分修复。`clip_corner` 已移除，但 SmartKnob 当前最终构建仍把 LVGL 解析成 builtin 64 KB allocator，设计中希望的 CLIB/PSRAM 迁移尚未实际生效。
-- 含义：不能再把当前版本写成“LVGL 已使用 libc/PSRAM 并彻底解决 64 KB 池问题”。
+- 当前状态：已彻底修复。`clip_corner` 已移除（历史修复），且 CUR-001 已解决：
+  LVGL malloc choice 切 CLIB，`lv_malloc` → libc `malloc` → SPIRAM
+  （见 CUR-001 与 ARCHITECTURE.md §9），clip_corner 类大层缓冲现在可以直接分配。
+- 含义：64 KB builtin 池问题从机制上消除；防回退见 ARCHITECTURE.md §9.3 / §22 第 26 条。
 
 ## BUG-002（Baseline）`lv_scale_set_major_tick_every(0)` 除零
 
