@@ -1,5 +1,11 @@
 # SmartKnob —— 基于 ESP32-S3 的联网力反馈智能旋钮
 
+> **English summary**: A networked haptic smart knob on ESP32-S3 — 13 BLDC+FOC detent modes
+> with an MT6701 encoder, LVGL 9.2 touch UI, BLE HID Surface Dial emulation for Windows
+> (track / volume / scroll / system dial modes), MQTT + Home Assistant, SCD40 environment
+> monitoring, and a built-in web dashboard with config & OTA. Docs are Chinese-only;
+> start from [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design.
+
 基于 BLDC + FOC 的力反馈旋钮，参考 X-Knob 与 scottbez1/SmartKnob，结合 SimpleFOC 硬件方案实现。
 
 - 本地：LVGL 9.2 终端 UI（旋钮 + 触摸交互）+ 13 种力反馈手感 + 环境监测
