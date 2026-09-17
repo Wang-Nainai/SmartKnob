@@ -109,6 +109,7 @@ static int parse_lines(const char *text, hass_device_cfg_t *out, int max)
                     buf[--nl] = 0;
                 }
                 if (nl > 0 && nl <= HASS_NAME_MAX_BYTES - 1) {
+                    buf[nl] = 0;   /* 强制终止: 名字占满截断宽度时防止 name 无 NUL 越界读 */
                     uint8_t type = parse_type(type_str);
                     if (type != 0xFF) {
                         memcpy(out[n].name, buf, nl + 1);

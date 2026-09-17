@@ -633,17 +633,24 @@ static void pg_hass_on_rotate(page_t *p, int32_t steps)
     hass_data_t *d = p->data;
     if (d->in_control) {
         if (hass_is_ac(d, d->focus)) {
-            /* 空调: 电机档位即值, 界面实时跟随; MQTT 由 timer 结算后发布终值 */
+            /* 空调: 电机档位即值, 界面实时跟随; MQTT 由 timer 结算后发布终值.
+             * 快转瞬间端点制动尚未拉回, position 可短暂越界(15/-1/4),
+             * 必须钳制 —— 否则 ac_temp 显示非法温度、ac_fan 越界索引
+             * ac_fan_names[4] 数组 */
             int f = d->focus;
             int32_t pos = motor_get_position();
             if (d->ac_mode[f] == 0) {
                 int t = 16 + pos;
+                if (t < 16) t = 16;
+                if (t > 30) t = 30;
                 if (t != d->ac_temp[f]) {
                     d->ac_temp[f] = t;
                     hass_ctrl_visual(d);
                     d->last_move_tick = lv_tick_get();
                 }
             } else {
+                if (pos < 0) pos = 0;
+                if (pos > 3) pos = 3;
                 if (pos != d->ac_fan[f]) {
                     d->ac_fan[f] = pos;
                     hass_ctrl_visual(d);

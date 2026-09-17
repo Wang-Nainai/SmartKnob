@@ -489,7 +489,7 @@ MQTT
 |---|---|
 | `pg_startup` | SmartKnob 启动动画；2 秒后根据触摸校准状态进入 `pg_tcal` 或 `pg_menu` |
 | `pg_menu` | 6 项三副本无限循环菜单；触摸滑动和旋钮切换焦点，点击进入 |
-| `pg_pcdial` | BLE HID 电脑控制；音量/滚轮模式切换、播放暂停、上一首/下一首、配对状态 |
+| `pg_pcdial` | BLE HID 电脑控制；单击模式键循环 切歌(默认)/音量/滚轮/表盘 四种模式，中央短按=播放暂停、表盘模式长按=弹 Windows 系统圆盘菜单，上一首/下一首恒可用；触摸手势横滑=音量、竖滑=滚轮；配对状态显示 |
 | `pg_playground` | 13 种 Motor 手感试玩；点击切换模式，Apple 风格圆盘（有界=量程窗内填充弧+端点红弧，无界=圆点绕全周） |
 | `pg_hass` | 真实设备循环列表：卧室灯/客厅灯/过道灯（开/关两档，旋转点击同效）+ 卧室空调（点图标圆底切温度/风速模式，旋转=每度一档/风速四象限）；控制视图为 Apple 风格表盘（温度=比例填充弧，开/关与风速=圆点定位） |
 | `pg_env` | CO2、温湿度、等级卡和 2 小时趋势图；旋转或点击切换 CO2/温度/湿度 |
@@ -768,40 +768,74 @@ SmartKnob
 HID Service 0x1812
 Battery Service 0x180F
 Device Information Service 0x180A
-PnP ID 0x2A50
+PnP ID 0x2A50（PID=0x4005）
 ```
 
 HID Report Map 包含：
 
 ```text
-Report ID 1：Consumer Control
+Report ID 1：Consumer Control（7 个用法逐位独立字段，16 位位图）
 Report ID 2：Mouse，3 按键 + dx/dy + wheel
+Report ID 10：Surface Dial（Rudimentary Dial 0x0E TLC，
+              Button1 + Touch 双位 + Dial 15-bit 相对角度）
 ```
 
 当前功能 API：
 
 ```text
 blehid_consumer_send
+blehid_dial_rotate
+blehid_dial_button
 blehid_mouse_scroll
 blehid_mouse_move
 blehid_disconnect
 blehid_unpair_all
 ```
 
-当前 UI 暴露音量加减、静音、播放/暂停、上一首/下一首、滚轮。相对鼠标移动 API 存在，但当前页面和 Web API 没有把它作为常规按钮暴露。
+### 14.2 报文协议（关键结论，防回退）
 
-### 14.2 配对与协议
+由 X-Knob / esp32-surface-dial / superdial 三个 Windows 实测可用项目反向验证：
+**Windows BLE HID 栈按各 input characteristic 的 Report Reference 匹配报告，
+通知内容全部是报告数据 —— 不带 Report ID 前缀**。
+
+曾把报文首字节写成 Report ID（如 `{10, ...}`），造成三类实测故障：
+
+- dial 报文：前缀 0x10 使旋转字段错位/越界 → 旋转无反应或单方向
+- consumer 报文：前缀 0x01 的 bit0 恰好 = Scan Next 用法 → 上一首/下一首都变下一首
+- dial button 报文：前缀使 Dial 字段被污染成大角度 → 点击被 Windows 当成一次滚动
+
+任何 HID 报文改动前必须先重读本节。报文格式：
+
+```text
+consumer(2B)  {mask_lo, mask_hi}
+mouse(4B)     {buttons, dx, dy, wheel}
+dial(3B)      {btn_byte, rot_lo, rot_hi7}
+btn_byte      bit0=Button1(按下), bit1=Touch(恒 1, 仿真 Surface Dial 触摸态)
+rot           15-bit 有符号补码, 单位 0.1 度 (unit exponent -1)
+```
+
+- 每格电机档位映射 ±100（=10 度/档），与 Espressif 官方 usb_surface_dial、
+  X-Knob 的每档值一致；Windows 圆盘 UI 每档响应一次。
+- 旋转/按压语义由 Windows 系统处理（短按/长按/工具切换），不经 Consumer 页。
+- PnP ID PID 用 0x4005：Report Map 变更（Button+Touch 布局）后必须让 Windows
+  把设备当新 HID 实例重新读 map —— Windows 按旧 map 缓存解析新报文会产生
+  位错乱（旋转单方向等），改 PID 强制重新枚举。
+
+### 14.3 配对与协议
 
 - 使用 Just Works、bonding、Secure Connections，不要求 MITM。
 - 绑定数据由 NimBLE 的 NVS 持久化能力保存。
-- 断线后重新广播。
-- Protocol Mode 支持 Boot/Report；Consumer 在 Boot 模式静默，Mouse Boot 报告使用 3 字节。
+- 断线后重新广播；REPEAT_PAIRING 删旧绑定后重试，防配对风暴。
+- Protocol Mode 支持 Boot/Report；Boot 模式下 Consumer/Dial 静默，Mouse Boot 报告 3 字节。
 - Windows 所需的 PnP ID 已实现，广播 appearance 使用 Generic HID 0x03C2。
 - 连接后请求 30..45 ms connection interval 和 latency 2，降低与 WiFi 共存时的空口争用。
+- `blehid_consumer_send` 内部 press→release 间隔 8ms；旋转发送采用 30ms 合批窗口
+  + pending 累计不丢失（页面侧实现），表盘模式一次报告携带全部积压并分段限幅。
 
 清除配对使用 `blehid_unpair_all()`，只清除 BLE 绑定，不影响 Motor 校准、触摸校准、WiFi 或 MQTT 配置。
 
-代码写明 Windows/macOS/Linux 免驱目标的实现方式，但仓库没有当前硬件上的完整配对与输入回归报告，仍应列入硬件待验证。
+S-Dial 页面（pg_pcdial）的 Windows 实测回归（旋转方向、上一首/下一首、
+播放暂停、长按系统菜单、重配对生效）仍需实体电脑验证；仓库无完整实机报告。
 
 ---
 
@@ -1154,14 +1188,21 @@ powershell -File tools\build.ps1 build
 17. 表盘指示全局唯一规则：连续值用填充弧，离散位置用圆点，两者互斥不得叠加；弧更新一律用 `lv_arc_set_angles` 直接设角，禁止用 `lv_arc_set_value`（内建值动画与定时器连发冲突，见 BUG-022/023）。
 18. `motor_get_angle_offset_deg()` 是档内偏角（恒可能非 0），不是越界距离；越界判定必须同时看位置是否停在边界档与偏移方向是否朝界外（见 BUG-022）。
 19. 旋转类调节（温度/风速）走 level 通道结算发布（静止 250 ms 发一次绝对值），禁止按档连发 ±1 事件（惯性滑档会造成 HA 连跳，见 BUG-021 之后的结算发布改造）。
+20. BLE HID 报文一律为纯数据，不得带 Report ID 前缀 —— Windows BLE HID 按 characteristic 的 Report Reference 匹配，前缀会污染数据位（旋转单方向/上一首变下一首/点击变滚动，见 BUG-024）。改 HID 协议前必须重读 §14.2。
+21. 以 `LV_EVENT_ALL` 注册的页面回调必须在入口拦截 `LV_EVENT_DELETE`（页面销毁广播，此时 p->data 已释放）；`pm_delete_page` 的固定顺序是先删对象树后释放数据，DELETE 期间数据有效但也不得执行业务操作（见 BUG-025）。
+22. "电机档位即值"的页面（HASS 空调、设置编辑等）读 `motor_get_position()` 后必须按该模式量程钳制 —— 端点制动拉回前位置会短暂越界，直接采用会写非法值（见 BUG-026）。
+23. esp_timer 回调内访问可被其它任务销毁的共享资源（如 MQTT client）必须 try-take 锁，拿不到即跳过本轮，不得阻塞等待（见 BUG-027）。
+24. 安全命令（急停等）不得排在命令队列 FIFO 尾部，应插队发送（见 BUG-027）。
+25. 传感器"60 秒自愈"计数必须同时覆盖正常未就绪路径与总线/CRC 错误路径（见 BUG-028）。
 
 ---
 
 ## 23. 当前文档与代码冲突摘要
 
 1. 实际 CPU 配置是 160 MHz，旧基线写 240 MHz。
-2. `CONFIG_LV_USE_STDLIB_MALLOC=1` 当前没有让 CLIB 生效，实际被 builtin choice 覆盖。
-3. Web `/api/envhist` 当前标记 300 秒间隔，但 env_hist 实际按 60 秒采样。
-4. page_mgr 当前在 pop 动画 ready 回调里删除页面对象，和硬约束存在冲突。
-5. `pg_setting` 重新校准路径在 LVGL 回调中阻塞 600 ms。
-6. `README.md` 仍包含旧 PSRAM、SPI 时钟、模式数量和依赖描述；本次任务只同步两份 docs 文档。
+2. `CONFIG_LV_USE_STDLIB_MALLOC=1` 当前没有让 CLIB 生效，实际被 builtin choice 覆盖（CUR-001，未修复）。
+3. Web `/api/envhist` 已改为 60 秒间隔（CUR-002 已修复，iv_s=60 与日级缓冲一致）。
+4. page_mgr 的 pop 动画 ready 回调删除页面对象形态仍在（CUR-003）：已把 `pm_delete_page` 改为"先删对象树后释放数据"缓解（DELETE 事件期间数据有效），彻底重构待做。
+5. `pg_setting` 重新校准路径的 600 ms 阻塞已改为非阻塞定时器重启（CUR-004 已修复）。
+6. `README.md` 仍包含旧 PSRAM、SPI 时钟、模式数量和依赖描述（CUR-006，未更新）。
+7. BLE HID Surface Dial 的 Windows 实测回归（旋转/按键/菜单/重配对）已有阶段性实机反馈：旋转、上一首/下一首、切歌模式已验证可用；播放暂停（表盘模式短按补发媒体键）与长按系统菜单需继续实测。

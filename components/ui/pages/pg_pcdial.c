@@ -14,23 +14,27 @@ bool ui_nvs_save_i32(const char *key, int32_t value);
 
 /* ============================================================
  * S-Dial 电脑控制 (仿 X-Knob Surface Dial)
- * BLE HID 连接电脑, Windows 免驱。两种主机协议 (长按模式键切换):
- *   Surface Dial 模式 (默认, Win10 1903+ 原生支持):
- *     旋转 = 系统拨号盘(音量/滚动由 Windows 处理)
- *     单击中 = 静音切换, 长按中 = 弹系统圆盘菜单 (系统语义)
- *   媒体键模式 (Android 兼容):
- *     旋转 = 音量加减 / 鼠标滚轮, 点击 = 播放/暂停, 底部 = 切歌
+ * BLE HID 连接电脑, Windows 免驱。单击模式键循环四种本地模式:
+ *   模式: 切歌 (默认) —— 旋转=下一首/上一首
+ *   模式: 音量        —— 旋转=音量加减
+ *   模式: 滚轮        —— 旋转=鼠标滚轮
+ *   模式: 表盘        —— Windows 系统拨号盘 (Win10 1903+ 原生):
+ *       旋转 = 系统语义(音量/滚动/媒体, 由 Windows 当前工具决定)
+ *       长按中央 = 弹系统圆盘菜单, 短按中央 = 播放/暂停
+ * 单击中央在音量/滚轮模式 = 播放/暂停; 上一首/下一首均有效。
+ * 长按模式键 = 直接回到表盘模式。
  * ============================================================ */
 
 typedef enum {
-    PC_MODE_VOLUME = 0,
-    PC_MODE_SCROLL,
+    PC_MODE_TRACK = 0,    /* 旋转=切歌 (默认) */
+    PC_MODE_VOLUME,       /* 旋转=音量加减 */
+    PC_MODE_SCROLL,       /* 旋转=鼠标滚轮 */
+    PC_MODE_DIAL,         /* Surface Dial 原生 (Windows 系统拨号盘) */
     PC_MODE_COUNT,
 } pc_mode_t;
 
 typedef struct {
     pc_mode_t mode;
-    bool dial_mode;     /* true=Surface Dial 原生协议(Windows), false=媒体键(兼容) */
     lv_obj_t *label_ble;
     lv_obj_t *btn_mode;
     lv_obj_t *label_mode;
@@ -38,25 +42,58 @@ typedef struct {
     lv_obj_t *label_play;
     lv_obj_t *btn_prev;
     lv_obj_t *btn_next;
+    int32_t pending_rot;      /* 尚未发送的累计旋转(限流保留量) */
+    uint32_t last_send_tick;  /* 上次发送时刻(30ms 合批窗口) */
+    lv_timer_t *flush_timer;  /* pending 补发定时器 */
+    int ble_state;            /* 上次蓝牙状态: -1未知 0断开 1连接 */
+    bool dial_held;           /* 表盘模式: 中央按钮已进入长按(dial button 已按下) */
 } pc_data_t;
+
+/* 模式标签(UTF-8) */
+static const char *PC_MODE_LABELS[PC_MODE_COUNT] = {
+    "\xE6\xA8\xA1\xE5\xBC\x8F\x3A \xE5\x88\x87\xE6\xAD\x8C",   /* 模式: 切歌 */
+    "\xE6\xA8\xA1\xE5\xBC\x8F\x3A \xE9\x9F\xB3\xE9\x87\x8F",   /* 模式: 音量 */
+    "\xE6\xA8\xA1\xE5\xBC\x8F\x3A \xE6\xBB\x9A\xE8\xBD\xAE",   /* 模式: 滚轮 */
+    "\xE6\xA8\xA1\xE5\xBC\x8F\x3A \xE8\xA1\xA8\xE7\x9B\x98",   /* 模式: 表盘 */
+};
 
 static void pc_mode_refresh(pc_data_t *d);
 
-static bool pc_dial_mode_get(void)
+static pc_mode_t pc_mode_get(void)
 {
-    int32_t v = 1;
-    ui_nvs_load_i32("pcdial_dial", &v);
-    return v != 0;
+    int32_t v = PC_MODE_TRACK;
+    if (ui_nvs_load_i32("pcdial_mode2", &v) && v >= 0 && v < PC_MODE_COUNT) {
+        return (pc_mode_t)v;
+    }
+    /* 迁移旧枚举 pcdial_mode (0=音量 1=滚轮 2=表盘) -> 新枚举偏移 +1 */
+    if (ui_nvs_load_i32("pcdial_mode", &v) && v >= 0 && v <= 2) {
+        return (pc_mode_t)(v + 1);
+    }
+    /* 兼容更旧键 pcdial_dial (0=媒体键, 1=表盘) */
+    int32_t old = 0;
+    if (ui_nvs_load_i32("pcdial_dial", &old) && old != 0) {
+        return PC_MODE_DIAL;
+    }
+    return PC_MODE_TRACK;
 }
 
-static void pc_dial_mode_save(bool dial)
+static void pc_mode_save(pc_mode_t mode)
 {
-    ui_nvs_save_i32("pcdial_dial", dial ? 1 : 0);
+    ui_nvs_save_i32("pcdial_mode2", mode);
 }
 
 static void pc_ble_status_refresh(pc_data_t *d)
 {
-    if (blehid_is_connected()) {
+    bool conn = blehid_is_connected();
+    int state = conn ? 1 : 0;
+    if (d->ble_state == state) {
+        return;
+    }
+    d->ble_state = state;
+    if (!conn) {
+        d->pending_rot = 0;
+    }
+    if (conn) {
         lv_label_set_text(d->label_ble, "\xE8\x93\x9D\xE7\x89\x99\x3A \xE5\xB7\xB2\xE8\xBF\x9E\xE6\x8E\xA5");
         lv_obj_set_style_text_color(d->label_ble, lv_color_hex(XK_COLOR_GREEN), 0);
     } else {
@@ -67,11 +104,71 @@ static void pc_ble_status_refresh(pc_data_t *d)
 
 static void pc_mode_refresh(pc_data_t *d)
 {
-    if (d->dial_mode) {
-        lv_label_set_text(d->label_mode, "\xE4\xB8\xBB\xE6\x9C\xBA\x3A \xE8\xA1\xA8\xE7\x9B\x98"); /* 主机: 表盘 */
-    } else {
-        lv_label_set_text(d->label_mode, "\xE4\xB8\xBB\xE6\x9C\xBA\x3A \xE5\xAA\x92\xE4\xBD\x93\xE9\x94\xAE"); /* 主机: 媒体键 */
+    lv_label_set_text(d->label_mode, PC_MODE_LABELS[d->mode]);
+}
+
+/* 发送 pending 旋转量(30ms 合批窗口, 窗口内只允许一次发送)。
+ * 窗口内的旋转累计在 pending_rot, 不丢弃, 由本函数或补发定时器完成。
+ * 表盘: 报告是相对值, 一次携带全部积压。
+ * 音量: consumer_send 内含 8ms 限速, 单次最多发 2 格。
+ * 滚轮: 相对值一次携带多格。 */
+static void pc_send_pending(pc_data_t *d)
+{
+    if (!blehid_is_connected()) {
+        d->pending_rot = 0;
+        return;
     }
+    if (d->pending_rot == 0) {
+        return;
+    }
+    uint32_t now = lv_tick_get();
+    if (now - d->last_send_tick < 30) {
+        return;   /* 窗口内延后, 不丢量 */
+    }
+    d->last_send_tick = now;
+    if (d->mode == PC_MODE_DIAL) {
+        /* dial_rotate 内部限幅 ±36 格; 积压超过时分段发完, 不丢步 */
+        while (d->pending_rot != 0) {
+            int32_t chunk = d->pending_rot;
+            if (chunk > 36) {
+                chunk = 36;
+            } else if (chunk < -36) {
+                chunk = -36;
+            }
+            blehid_dial_rotate(chunk);
+            d->pending_rot -= chunk;
+        }
+        return;
+    }
+    if (d->mode == PC_MODE_TRACK || d->mode == PC_MODE_VOLUME) {
+        int n = d->pending_rot > 0 ? d->pending_rot : -d->pending_rot;
+        if (n > 2) {
+            n = 2;
+        }
+        uint16_t usage_pos = (d->mode == PC_MODE_TRACK) ? HID_CONSUMER_SCAN_NEXT
+                                                        : HID_CONSUMER_VOLUME_UP;
+        uint16_t usage_neg = (d->mode == PC_MODE_TRACK) ? HID_CONSUMER_SCAN_PREV
+                                                        : HID_CONSUMER_VOLUME_DOWN;
+        for (int i = 0; i < n; i++) {
+            blehid_consumer_send(d->pending_rot > 0 ? usage_pos : usage_neg);
+        }
+        d->pending_rot += (d->pending_rot > 0) ? -n : n;
+    } else {
+        int32_t v = d->pending_rot;
+        if (v > 20) {
+            v = 20;
+        } else if (v < -20) {
+            v = -20;
+        }
+        /* HID wheel 正值=向上滚; 旋钮顺时针=向下滚, 取反对齐直觉 */
+        blehid_mouse_scroll((int8_t)-v);
+        d->pending_rot -= v;
+    }
+}
+
+static void pc_flush_timer_cb(lv_timer_t *t)
+{
+    pc_send_pending((pc_data_t *)lv_timer_get_user_data(t));
 }
 
 static void pc_apply_rotate(pc_data_t *d, int32_t steps)
@@ -79,70 +176,81 @@ static void pc_apply_rotate(pc_data_t *d, int32_t steps)
     if (!blehid_is_connected()) {
         return;
     }
-    /* 节流: consumer_send 内部有 8ms 延时且在 LVGL 任务执行,
-     * 快转时限制发送频率避免 UI 卡顿/音量飞转 */
-    static uint32_t last_send_tick = 0;
-    uint32_t now = lv_tick_get();
-    if (now - last_send_tick < 40) {
-        return;
-    }
-    last_send_tick = now;
-
-    if (d->dial_mode) {
-        /* Surface Dial 原生: 系统拨号盘, 音量/滚动由 Windows 语义处理 */
-        blehid_dial_rotate(steps);
-        return;
-    }
-    if (d->mode == PC_MODE_VOLUME) {
-        /* Windows 每个音量报告 = 2 格; 单事件最多 2 次 */
-        int n = steps > 0 ? steps : -steps;
-        if (n > 2) n = 2;
-        for (int i = 0; i < n; i++) {
-            blehid_consumer_send(steps > 0 ? HID_CONSUMER_VOLUME_UP : HID_CONSUMER_VOLUME_DOWN);
-        }
-    } else {
-        for (int i = 0; i < steps; i++) {
-            blehid_mouse_scroll(steps > 0 ? 1 : -1);
-        }
-    }
+    d->pending_rot += steps;
+    pc_send_pending(d);
 }
 
-/* 模式切换按钮: 单击=音量/滚轮, 长按=Surface Dial/媒体键(主机协议) */
+/* 页面回调统一入口防御: pop 动画回调销毁页面时 pm_delete_page 先 free
+ * 页面数据再 lv_obj_delete, LVGL 删除对象树会广播 LV_EVENT_DELETE,
+ * 此时 p->data 已为 NULL, 不得解引用 (BUG: 退出页面时触摸仍按着按钮,
+ * 回调收到 DELETE 事件后读 NULL 崩溃) */
+
+/* 模式切换按钮: 单击循环 音量 -> 滚轮 -> 表盘 */
 static void pc_mode_btn_cb(lv_event_t *e)
 {
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_DELETE) {
+        return;
+    }
     lv_obj_t *obj = lv_event_get_current_target(e);
     page_t *p = (page_t *)lv_obj_get_user_data(obj);
     pc_data_t *d = p->data;
-    lv_event_code_t code = lv_event_get_code(e);
     if (code == LV_EVENT_LONG_PRESSED) {
-        d->dial_mode = !d->dial_mode;
-        pc_dial_mode_save(d->dial_mode);
+        /* 长按保留: 直接回到表盘模式(Windows 系统拨号盘) */
+        d->mode = PC_MODE_DIAL;
+        pc_mode_save(d->mode);
+        d->pending_rot = 0;
         pc_mode_refresh(d);
         pm_shake();
-    } else if (code == LV_EVENT_SHORT_CLICKED || code == LV_EVENT_CLICKED) {
-        if (d->dial_mode) {
-            return;   /* 表盘模式下 Windows 管语义, 无需本地模式 */
-        }
+    } else if (code == LV_EVENT_SHORT_CLICKED) {
         d->mode = (d->mode + 1) % PC_MODE_COUNT;
+        pc_mode_save(d->mode);
+        d->pending_rot = 0;
         pc_mode_refresh(d);
         pm_shake();
     }
 }
 
-/* 中间播放/暂停 (媒体键模式); Surface Dial 模式下中间按压=系统菜单选择 */
-static void pc_tap_cb(lv_event_t *e)
+/* 中央按钮:
+ * 表盘模式: 长按按住 = dial button down -> Windows 弹系统圆盘菜单;
+ *           短按 = 播放/暂停 (Windows 对无上下文的 dial click 无默认动作,
+ *           直接补发媒体键, 两类功能都保留)。
+ * 音量/滚轮模式: 单击 = 播放/暂停 */
+static void pc_play_cb(lv_event_t *e)
 {
-    (void)e;
-    page_t *p = NULL;
-    if (blehid_is_connected()) {
-        blehid_consumer_send(HID_CONSUMER_PLAY_PAUSE);
-        pm_shake();
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_DELETE) {
+        return;
+    }
+    lv_obj_t *obj = lv_event_get_current_target(e);
+    page_t *p = (page_t *)lv_obj_get_user_data(obj);
+    pc_data_t *d = p->data;
+    if (d->mode == PC_MODE_DIAL) {
+        if (code == LV_EVENT_LONG_PRESSED) {
+            d->dial_held = true;
+            blehid_dial_button(true);
+        } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
+            blehid_dial_button(false);
+            bool held = d->dial_held;
+            d->dial_held = false;
+            if (!held && code == LV_EVENT_RELEASED && blehid_is_connected()) {
+                blehid_consumer_send(HID_CONSUMER_PLAY_PAUSE);
+                pm_shake();
+            }
+        }
+    } else if (code == LV_EVENT_SHORT_CLICKED) {
+        if (blehid_is_connected()) {
+            blehid_consumer_send(HID_CONSUMER_PLAY_PAUSE);
+            pm_shake();
+        }
     }
 }
 
 static void pc_prev_cb(lv_event_t *e)
 {
-    (void)e;
+    if (lv_event_get_code(e) != LV_EVENT_SHORT_CLICKED) {
+        return;
+    }
     if (blehid_is_connected()) {
         blehid_consumer_send(HID_CONSUMER_SCAN_PREV);
         pm_shake();
@@ -151,7 +259,9 @@ static void pc_prev_cb(lv_event_t *e)
 
 static void pc_next_cb(lv_event_t *e)
 {
-    (void)e;
+    if (lv_event_get_code(e) != LV_EVENT_SHORT_CLICKED) {
+        return;
+    }
     if (blehid_is_connected()) {
         blehid_consumer_send(HID_CONSUMER_SCAN_NEXT);
         pm_shake();
@@ -173,7 +283,8 @@ static lv_obj_t *pc_button_create(lv_obj_t *parent, lv_coord_t x, lv_coord_t y,
     lv_obj_set_style_border_width(btn, 1, 0);
     lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_user_data(btn, p);
-    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, NULL);
+    /* LV_EVENT_ALL: 长按与单击在同一回调内分流; DELETE 事件由回调内拦截 */
+    lv_obj_add_event_cb(btn, cb, LV_EVENT_ALL, NULL);
 
     lv_obj_t *label = lv_label_create(btn);
     lv_obj_set_style_text_color(label, lv_color_hex(XK_COLOR_TEXT), 0);
@@ -187,8 +298,8 @@ static void pg_pcdial_create(page_t *p)
 {
     pc_data_t *d = calloc(1, sizeof(pc_data_t));
     p->data = d;
-    d->mode = PC_MODE_VOLUME;
-    d->dial_mode = pc_dial_mode_get();
+    d->mode = pc_mode_get();
+    d->ble_state = -1;
     p->title = "S-Dial";
 
     d->label_ble = lv_label_create(p->root);
@@ -212,7 +323,7 @@ static void pg_pcdial_create(page_t *p)
     lv_obj_set_style_border_color(d->btn_play, lv_color_hex(XK_COLOR_ACCENT), 0);
     lv_obj_set_style_border_width(d->btn_play, 2, 0);
     lv_obj_set_user_data(d->btn_play, p);
-    lv_obj_add_event_cb(d->btn_play, pc_tap_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(d->btn_play, pc_play_cb, LV_EVENT_ALL, NULL);
 
     d->label_play = lv_label_create(d->btn_play);
     lv_obj_set_style_text_color(d->label_play, lv_color_hex(XK_COLOR_TEXT), 0);
@@ -230,23 +341,35 @@ static void pg_pcdial_create(page_t *p)
     lv_obj_t *hint = lv_label_create(p->root);
     lv_obj_set_style_text_color(hint, lv_color_hex(XK_COLOR_FAINT), 0);
     lv_obj_set_style_text_font(hint, &lv_font_msyh_16, 0);
-    lv_label_set_text(hint, "\xE8\x93\x9D\xE7\x89\x99\xE8\xAE\xBE\xE7\xBD\xAE\xE4\xB8\xAD\xE6\x90\x9C\xE7\xB4\xA2 SmartKnob"
-                             "\n\xE9\x95\xBF\xE6\x8C\x89\xE6\xA8\xA1\xE5\xBC\x8F\xE9\x94\xAE\xE5\x88\x87\xE6\x8D\xA2\xE4\xB8\xBB\xE6\x9C\xBA\xE5\x8D\x8F\xE8\xAE\xAE"); /* 长按模式键切换主机协议 */
+    lv_label_set_text(hint, "\xE8\x93\x9D\xE7\x89\x99\xE6\x90\x9C\xE7\xB4\xA2 SmartKnob"
+                             "\n\xE5\x8D\x95\xE5\x87\xBB\xE5\x88\x87\xE6\x8D\xA2\xE6\xA8\xA1\xE5\xBC\x8F"); /* 蓝牙搜索 SmartKnob / 单击切换模式 */
     lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -4);
 
     lv_obj_remove_flag(p->root, LV_OBJ_FLAG_SCROLLABLE);
     /* 棘轮手感: 旋转一格一咔哒(齿轮感), 一格=一次音量/滚轮动作 */
     motor_set_mode(MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
+
+    /* 媒体键模式 pending 旋转补发(30ms 周期, pending=0 时开销仅一次函数调用) */
+    d->flush_timer = lv_timer_create(pc_flush_timer_cb, 30, d);
 }
 
 static void pg_pcdial_destroy(page_t *p)
 {
-    free(p->data);
+    pc_data_t *d = p->data;
+    if (d) {
+        if (d->flush_timer) {
+            lv_timer_del(d->flush_timer);
+        }
+        free(d);
+    }
     p->data = NULL;
 }
 
 static void pg_pcdial_on_rotate(page_t *p, int32_t steps)
 {
+    if (!p->data) {
+        return;
+    }
     pc_apply_rotate((pc_data_t *)p->data, steps);
 }
 
@@ -257,7 +380,17 @@ static void pg_pcdial_on_back(page_t *p)
 
 static void pg_pcdial_on_tick(page_t *p)
 {
+    if (!p->data) {
+        return;
+    }
     pc_ble_status_refresh((pc_data_t *)p->data);
+}
+
+static void pg_pcdial_on_resume(page_t *p)
+{
+    (void)p;
+    /* 从子页面/工厂测试返回后重新声明本页手感(幂等) */
+    motor_set_mode(MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
 }
 
 /* 触摸手势(LVGL 原生 GESTURE 事件, 由 smartknob_ui 路由):
@@ -300,6 +433,6 @@ const page_ops_t pg_pcdial_ops = {
     .destroy = pg_pcdial_destroy,
     .on_rotate = pg_pcdial_on_rotate,
     .on_back = pg_pcdial_on_back,
-    .on_resume = NULL,
+    .on_resume = pg_pcdial_on_resume,
     .on_tick = pg_pcdial_on_tick,
 };

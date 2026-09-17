@@ -426,7 +426,7 @@ static esp_err_t handler_status(httpd_req_t *req)
     return httpd_resp_send(req, buf, n);
 }
 
-/* GET /api/envhist: 24h 环境历史 (5min/点, 温湿度为 x10 整数)
+/* GET /api/envhist: 24h 环境历史 (60s/点, 温湿度为 x10 整数)
  * 体积 ~5KB, 用 chunked 发送避免大响应缓冲 */
 static esp_err_t handler_envhist(httpd_req_t *req)
 {
@@ -434,7 +434,7 @@ static esp_err_t handler_envhist(httpd_req_t *req)
     httpd_resp_set_type(req, "application/json");
     char buf[256];
     int cnt = env_day_count();
-    int n = snprintf(buf, sizeof(buf), "{\"iv_s\":300,\"n\":%d,\"co2\":[", cnt);
+    int n = snprintf(buf, sizeof(buf), "{\"iv_s\":60,\"n\":%d,\"co2\":[", cnt);
     httpd_resp_send_chunk(req, buf, n);
     for (int i = 0; i < cnt; i++) {
         n = snprintf(buf, sizeof(buf), "%u%s", env_day_co2_at(i),

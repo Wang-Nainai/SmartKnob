@@ -806,5 +806,10 @@ void motor_shake(int strength, int delay_ms)
 void motor_disable(void)
 {
     motor_cmd_t cmd = { .type = MOTOR_CMD_DISABLE, .a1 = 0, .a2 = 0, .a3 = 0, .a4 = 0 };
-    post_cmd(cmd);
+    /* 紧急停是安全命令: 插队发送(队首), 不得排在积压的力反馈命令之后;
+     * 队满时插队会挤掉最旧的一条普通命令, 可接受 */
+    if (!s_cmd_queue ||
+        xQueueSendToFront(s_cmd_queue, &cmd, pdMS_TO_TICKS(20)) != pdTRUE) {
+        ESP_LOGW(TAG, "motor disable enqueue failed (queue full)");
+    }
 }

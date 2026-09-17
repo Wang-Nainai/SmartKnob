@@ -160,11 +160,18 @@ static void pm_delete_page(page_t *p)
     if (!p) {
         return;
     }
-    if (p->ops->destroy) {
-        p->ops->destroy(p);
-    }
+    /* 先删对象树再释放数据: lv_obj_delete 会向子树广播 LV_EVENT_DELETE,
+     * 此时页面数据必须仍然有效 —— 所有页面回调都不得在 DELETE 事件中
+     * 执行业务操作, 但可以安全读取 user_data/p->data (CUR-003 缓解:
+     * 原顺序先 destroy 后删树, DELETE 期间数据已失效, 曾致 S-Dial
+     * 按住按钮退出页面时崩溃)。已核对全部 12 个页面 destroy 均不访问
+     * p->root, 本顺序安全。 */
     if (p->root) {
         lv_obj_delete(p->root);
+        p->root = NULL;
+    }
+    if (p->ops->destroy) {
+        p->ops->destroy(p);
     }
     free(p);
 }

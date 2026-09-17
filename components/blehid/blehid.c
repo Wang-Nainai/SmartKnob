@@ -19,27 +19,36 @@ static const char *TAG = "blehid";
 /* ---------------- HID Report Map ----------------
  * Report ID 1: Consumer Control (16 位位图, 行业标准形式)
  * Report ID 2: Mouse (3 按键 + XY 相对 + 滚轮)
- * Windows/macOS/Linux 免驱识别。 */
+ * Windows/macOS/Linux 免驱识别。
+ * 报文约定: Windows BLE HID 按各 characteristic 的 Report Reference 匹配,
+ * 通知内容=纯报告数据, 不带 Report ID 前缀 (由 X-Knob/esp32-surface-dial/
+ * superdial 三个实测可用项目反向验证)。 */
 static const uint8_t s_report_map[] = {
-    /* Surface Dial — Microsoft 官方 BLE HID 描述符 (来自 Surface_Dial_Arduino
-     * 项目的 ATtiny V-USB 实现, 与真 Surface Dial 同构):
-     * Generic Desktop Usage 0x0E (Rudimentary Dial) 是 Windows 10 1903+
-     * 原生支持的设备类 —— 旋转由系统处理(音量/滚动/媒体), 按压弹系统
-     * 圆盘菜单, 完全绕开 Consumer 页媒体键的 Windows 解析怪癖。 */
+    /* Surface Dial — Rudimentary Dial TLC, Win10 1903+ 原生支持。
+     * 按钮采用 Button1 + Touch 双位形式 (X-Knob/esp32-surface-dial
+     * 在 Windows 上实测可用的形态): 真 Surface Dial 是触摸唤醒设备,
+     * Touch 位恒 1 模拟"手在盘上", Button1 表按压状态。
+     * 报文 4 字节: {id, btn_byte, rot_lo, rot_hi7} */
     0x05, 0x01,                     /* Usage Page (Generic Desktop) */
     0x09, 0x0e,                     /* Usage (Rudimentary Dial) */
     0xA1, 0x01,                     /* Collection (Application) */
     0x85, 10,                       /*   Report ID (10) */
     0x05, 0x0d,                     /*   Usage Page (Digitizers) */
-    0x09, 0x21,                     /*   Usage (Pulse) 触觉脉冲标志 */
+    0x09, 0x21,                     /*   Usage (Puck) 拨盘本体 */
     0xA1, 0x00,                     /*   Collection (Physical) */
     0x05, 0x09,                     /*     Usage Page (Button) */
     0x09, 0x01,                     /*     Usage (Button 1) 按下 */
     0x95, 0x01, 0x75, 0x01,         /*     Count 1, Size 1 */
     0x15, 0x00, 0x25, 0x01,         /*     Logical 0..1 */
-    0x81, 0x02,                     /*     Input (Data, Var, Abs) */
+    0x81, 0x02,                     /*     Input (Data, Var, Abs)  bit0 */
+    0x05, 0x0d,                     /*     Usage Page (Digitizers) */
+    0x09, 0x33,                     /*     Usage (Touch) 触摸态 */
+    0x95, 0x01, 0x75, 0x01,         /*     Count 1, Size 1 */
+    0x81, 0x02,                     /*     Input (Data, Var, Abs)  bit1 */
+    0x95, 0x06, 0x75, 0x01,         /*     Count 6, Size 1 */
+    0x81, 0x03,                     /*     Input (Const) padding  bits2-7 */
     0x05, 0x01,                     /*     Usage Page (Generic Desktop) */
-    0x09, 0x37,                     /*     Usage (Dial 旋转) */
+    0x09, 0x37,                     /*     Usage (Dial 旋转)  bits8-22 */
     0x95, 0x01, 0x75, 0x0f,         /*     Count 1, Size 15 */
     0x55, 0x0f, 0x65, 0x14,         /*     Unit Exponent, Unit (角度) */
     0x36, 0xf0, 0xf1,               /*     Physical Min (-3600) */
@@ -47,6 +56,8 @@ static const uint8_t s_report_map[] = {
     0x16, 0xf0, 0xf1,               /*     Logical Min (-3600) */
     0x26, 0x10, 0x0e,               /*     Logical Max (3600) */
     0x81, 0x06,                     /*     Input (Data, Var, Rel) 相对旋转 */
+    0x75, 0x01, 0x95, 0x01,         /*     Count 1, Size 1 */
+    0x81, 0x03,                     /*     Input (Const) padding  bit23 */
     0xC0,                           /*   End Collection (Physical) */
     0xC0,                           /* End Collection (Application) */
     /* Mouse */
@@ -132,8 +143,11 @@ static const uint8_t report_ref_dial[2]     = { 10, 0x01 };
 static const uint8_t hid_info_val[4] = { 0x01, 0x01, 0x00, 0x02 };
 static uint8_t proto_mode_val = 0x01;         /* 当前协议: 1=report, 0=boot(主机可写切换) */static const uint8_t battery_val = 100;
 /* PnP ID: Win/BLE HID 类驱动强制要求, 缺失则配对成功也不创建 HID 设备
- * {来源=USB-IF, VID=0x303A(Espressif), PID=0x4004, 版本=1.0} */
-static const uint8_t pnp_id_val[7] = { 0x02, 0x3A, 0x30, 0x04, 0x40, 0x00, 0x01 };
+ * {来源=USB-IF, VID=0x303A(Espressif), PID=0x4005, 版本=1.0}
+ * PID 0x4005: Report Map 变更(Button+Touch 布局)后必须让 Windows 把本设备
+ * 视为新 HID 实例重新读取 Report Map —— Windows 按旧 map 缓存解析新报文
+ * 会产生位错乱(旋转单方向/按键错乱), 改 PID 强制重新枚举。 */
+static const uint8_t pnp_id_val[7] = { 0x02, 0x3A, 0x30, 0x05, 0x40, 0x00, 0x01 };
 
 static void adv_start(void);
 
@@ -176,7 +190,8 @@ static int proto_mode_cb(uint16_t conn, uint16_t attr, struct ble_gatt_access_ct
 
 static int report_read_cb(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
-    /* 输入报告读取返回全 0 (无按键/无移动); 长度与报告描述符一致 */
+    /* 输入报告读取返回全 0 (无按键/无移动); 长度=报告数据长度(不含 Report ID,
+     * Windows BLE HID 按通知内容=纯数据解析, 见 dial 报告处说明) */
     uint8_t len = (uint8_t)(uintptr_t)arg;
     static const uint8_t zero5[5] = {0};
     return os_mbuf_append(ctxt->om, zero5, len);
@@ -223,7 +238,7 @@ static const struct ble_gatt_svc_def gatt_svcs[] = {
             {   /* Input Report: Consumer Control */
                 .uuid = &uuid_chr_report.u,
                 .access_cb = report_read_cb,
-                .arg = (void *)(uintptr_t)3,   /* {id, usage_lo, usage_hi} */
+                .arg = (void *)(uintptr_t)2,   /* {usage_lo, usage_hi} 位图 */
                 .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
                 .val_handle = &h_consumer_report,
                 .descriptors = (struct ble_gatt_dsc_def[]) {
@@ -237,7 +252,7 @@ static const struct ble_gatt_svc_def gatt_svcs[] = {
             {   /* Input Report: Mouse */
                 .uuid = &uuid_chr_report.u,
                 .access_cb = report_read_cb,
-                .arg = (void *)(uintptr_t)5,   /* {id, buttons, dx, dy, wheel} */
+                .arg = (void *)(uintptr_t)4,   /* {buttons, dx, dy, wheel} */
                 .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
                 .val_handle = &h_mouse_report,
                 .descriptors = (struct ble_gatt_dsc_def[]) {
@@ -248,10 +263,10 @@ static const struct ble_gatt_svc_def gatt_svcs[] = {
                     { 0 },
                 },
             },
-            {   /* Input Report: Surface Dial (Microsoft 官方描述符, Win10 1903+ 原生支持) */
+            {   /* Input Report: Surface Dial (Win10 1903+ 原生支持) */
                 .uuid = &uuid_chr_report.u,
                 .access_cb = report_read_cb,
-                .arg = (void *)(uintptr_t)3,   /* {id, val_lo, val_hi} */
+                .arg = (void *)(uintptr_t)3,   /* {btn, rot_lo, rot_hi7} */
                 .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
                 .val_handle = &h_dial_report,
                 .descriptors = (struct ble_gatt_dsc_def[]) {
@@ -502,29 +517,45 @@ static uint16_t consumer_usage_to_mask(uint16_t usage)
 }
 
 /* ---------------- Surface Dial 报告 (Windows 10 1903+ 原生支持) ----------------
- * 报告 16 位小端: bit0=按下, bit1..15=相对旋转量(有符号, ±3600=±10圈)
- * 旋转/按压由 Windows 系统处理 —— 不经 Consumer 页媒体键 */
+ * 关键事实(由 X-Knob/esp32-surface-dial/superdial 三个 Windows 实测可用
+ * 项目反向验证): Windows BLE HID 栈按 characteristic 的 Report Reference
+ * 匹配报告, 通知内容全部是数据 —— 不带 Report ID 前缀!
+ * 报文首字节=Report ID 的写法会把 ID 污染进数据位:
+ *   - dial: {10,...} 的 0x10 使旋转字段错位/越界 -> 旋转无反应/单方向
+ *   - consumer: {01,mask,...} 的 0x01 bit0 恰好=Scan Next -> 上一首/下一首都变下一首
+ * dial 数据 3 字节: {btn_byte, rot_lo, rot_hi7}
+ * btn_byte: bit0=Button1(按下), bit1=Touch(恒 1, 仿 Surface Dial 触摸态)
+ * rot 15-bit 有符号相对值, 单位 0.1 度 (unit exponent -1)。
+ * 旋转/按压由 Windows 系统处理 —— 不经 Consumer 页媒体键。
+ * 每档旋转 ±100(=10 度/档) 与 X-Knob(DIAL_R=0xC8 -> bit0..15=+100)/
+ * Espressif 官方 usb_surface_dial 一致。 */
 
 void blehid_dial_rotate(int steps)
 {
-    if (!s_connected || steps == 0) {
-        return;
+    if (!s_connected || proto_mode_val == 0 || steps == 0) {
+        return;   /* boot 协议无 dial 格式, 静默 */
     }
-    if (steps > 3600) steps = 3600;
-    if (steps < -3600) steps = -3600;
-    /* bit0=按键位恒 0; bit1..15 = 旋转量(有符号, 左移 1 位嵌入) */
-    uint16_t val = (uint16_t)((steps << 1) & 0xFFFE);
-    uint8_t report[3] = { 10, (uint8_t)(val & 0xFF), (uint8_t)(val >> 8) };
+    /* 先限格数再乘单位, 防止"先乘后限"把大负值钳成单方向 */
+    if (steps > 36) steps = 36;
+    if (steps < -36) steps = -36;
+    /* 电机档数 -> 拨盘旋转单位: 1 档 = 10 度 = ±100 */
+    steps *= 100;
+    /* 15-bit 有符号补码 */
+    uint16_t rot = (uint16_t)(steps & 0x7FFF);
+    uint8_t report[3] = { 0x02,                      /* Touch=1, Button1=0 */
+                          (uint8_t)(rot & 0xFF),
+                          (uint8_t)((rot >> 8) & 0x7F) };
     notify(h_dial_report, report, 3);
 }
 
 void blehid_dial_button(bool down)
 {
-    if (!s_connected) {
+    if (!s_connected || proto_mode_val == 0) {
         return;
     }
-    uint16_t val = down ? 0x0001 : 0x0000;   /* bit0=按键, 旋转位恒 0 */
-    uint8_t report[3] = { 10, (uint8_t)(val & 0xFF), (uint8_t)(val >> 8) };
+    /* bit0=Button1 按下; bit1=Touch 保持 1; rot=0 */
+    uint8_t btn_byte = down ? 0x03 : 0x02;
+    uint8_t report[3] = { btn_byte, 0x00, 0x00 };
     notify(h_dial_report, report, 3);
 }
 
@@ -538,12 +569,13 @@ void blehid_consumer_send(uint16_t usage)
         ESP_LOGW(TAG, "consumer usage=0x%02X not mapped, dropped", usage);
         return;
     }
-    ESP_LOGI(TAG, "consumer send usage=0x%02X mask=0x%04X (report_id=1)", usage, mask);
-    uint8_t press[3]   = { 0x01, (uint8_t)(mask & 0xFF), (uint8_t)(mask >> 8) };
-    uint8_t release[3] = { 0x01, 0x00, 0x00 };
-    notify(h_consumer_report, press, 3);
+    ESP_LOGD(TAG, "consumer send usage=0x%02X mask=0x%04X", usage, mask);
+    /* 报文=纯数据(无 Report ID 前缀), 见 dial 报告处的说明 */
+    uint8_t press[2]   = { (uint8_t)(mask & 0xFF), (uint8_t)(mask >> 8) };
+    uint8_t release[2] = { 0x00, 0x00 };
+    notify(h_consumer_report, press, 2);
     vTaskDelay(pdMS_TO_TICKS(8));
-    notify(h_consumer_report, release, 3);
+    notify(h_consumer_report, release, 2);
 }
 
 void blehid_mouse_scroll(int8_t wheel)
@@ -552,8 +584,9 @@ void blehid_mouse_scroll(int8_t wheel)
         /* boot 协议 3 字节鼠标无滚轮字段, 只能发 0 移动保持连接活性无意义, 跳过 */
         return;
     }
-    uint8_t report[5] = { 0x02, 0x00, 0x00, 0x00, (uint8_t)wheel };
-    notify(h_mouse_report, report, 5);
+    /* 报文=纯数据: {buttons, dx, dy, wheel} */
+    uint8_t report[4] = { 0x00, 0x00, 0x00, (uint8_t)wheel };
+    notify(h_mouse_report, report, 4);
 }
 
 void blehid_mouse_move(int8_t dx, int8_t dy)
@@ -563,8 +596,8 @@ void blehid_mouse_move(int8_t dx, int8_t dy)
         notify(h_mouse_report, boot, 3);
         return;
     }
-    uint8_t report[5] = { 0x02, 0x00, (uint8_t)dx, (uint8_t)dy, 0x00 };
-    notify(h_mouse_report, report, 5);
+    uint8_t report[4] = { 0x00, (uint8_t)dx, (uint8_t)dy, 0x00 };
+    notify(h_mouse_report, report, 4);
 }
 
 esp_err_t blehid_init(void)

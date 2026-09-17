@@ -102,19 +102,29 @@ static void sample_once(void)
     if (dtotal == 0) {
         dtotal = 1;
     }
-    /* 每核容量 = 双核总运行时的一半 */
     uint32_t cap = dtotal / 2;
-    s_snap.cpu0 = (cap > 0) ? (uint8_t)(100 - (uint64_t)d_idle0 * 100 / cap) : 0;
-    s_snap.cpu1 = (cap > 0) ? (uint8_t)(100 - (uint64_t)d_idle1 * 100 / cap) : 0;
-    if (s_snap.cpu0 > 100) s_snap.cpu0 = 100;
-    if (s_snap.cpu1 > 100) s_snap.cpu1 = 100;
-    s_snap.cpu_total = (s_snap.cpu0 + s_snap.cpu1) / 2;
+    uint8_t cpu0 = (cap > 0) ? (uint8_t)(100 - (uint64_t)d_idle0 * 100 / cap) : 0;
+    uint8_t cpu1 = (cap > 0) ? (uint8_t)(100 - (uint64_t)d_idle1 * 100 / cap) : 0;
+    if (cpu0 > 100) cpu0 = 100;
+    if (cpu1 > 100) cpu1 = 100;
 
-    s_snap.int_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    s_snap.int_total = heap_caps_get_total_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    s_snap.ps_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-    s_snap.ps_total = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
-    s_snap.min_free = esp_get_minimum_free_heap_size();
+    /* 堆采样移出临界区: heap_caps_* 内部取堆互斥锁, 若在关中断临界区内
+     * 拿锁, 持锁任务恰好被切走时将死锁(本任务中断已关) */
+    uint32_t int_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    uint32_t int_total = heap_caps_get_total_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    uint32_t ps_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    uint32_t ps_total = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
+    uint32_t min_free = esp_get_minimum_free_heap_size();
+
+    portENTER_CRITICAL(&s_snap_mux);
+    s_snap.cpu0 = cpu0;
+    s_snap.cpu1 = cpu1;
+    s_snap.cpu_total = (cpu0 + cpu1) / 2;
+    s_snap.int_free = int_free;
+    s_snap.int_total = int_total;
+    s_snap.ps_free = ps_free;
+    s_snap.ps_total = ps_total;
+    s_snap.min_free = min_free;
     portEXIT_CRITICAL(&s_snap_mux);
 
     s_last_total = total;

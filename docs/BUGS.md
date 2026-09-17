@@ -191,53 +191,113 @@
 - 修复方式：indicator 宽度 12 + 圆头，颜色随开关状态联动。
 - 当前状态：已修复。防回退：表盘弧层创建时必须核对指示层宽度；全局规则见 ARCHITECTURE.md §22 第 17 条（填充弧与圆点互斥、一律 `lv_arc_set_angles` 直接设角、禁止 `lv_arc_set_value`——其内建值动画与 50ms 定时器连发冲突曾造成填充滞后回弹）。
 
+## BUG-024（硬件实测）BLE HID 报文携带 Report ID 前缀导致三类输入全部异常
+
+- 现象（实机 Windows 实测）：表盘模式旋转无反应或单方向；上一首/下一首都触发下一首；点击中央被 Windows 当成一次滚动。
+- 根因：Windows BLE HID 栈按 input characteristic 的 Report Reference 匹配报告，通知内容全部是数据，**不带 Report ID 前缀**。报文首字节写 Report ID 会把 ID 污染进数据位：
+  - dial `{10,...}`：0x10 使旋转字段错位，解码值超出 logical 范围被丢弃
+  - consumer `{01,mask,...}`：0x01 的 bit0 恰好 = Scan Next 用法，无论 mask 都触发下一首
+  - dial button `{10,03,00,00}`：Dial 字段被污染成 +768（+76.8°），Windows 执行一次滚动
+- 归属：BLE HID 协议层。
+- 修复方式：全部报文改为纯数据（consumer 2B / mouse 4B / dial 3B）；dial TLC 加 Touch 位（Button1+Touch 双位，Touch 恒 1）；每档旋转 ±100（10 度/档，对齐 Espressif 官方与 X-Knob）；PnP PID 0x4004→0x4005 强制 Windows 重新枚举读新 map。
+- 当前状态：已修复并有阶段性实测反馈（旋转方向、上一首/下一首、切歌模式可用）。防回退：改 HID 报文前必须重读 ARCHITECTURE.md §14.2；**报文不得携带 Report ID 前缀**。
+
+## BUG-025（Regression）按住按钮退出页面时崩溃（LoadProhibited）
+
+- 现象：触摸按着页面按钮未松手时退出页面，偶发 Core 0 panic（EXCVADDR=0x0）。
+- 根因：`pm_delete_page` 原顺序先 `destroy()`（free 页面数据）再 `lv_obj_delete`；LVGL 删除对象树广播 `LV_EVENT_DELETE`，S-Dial 页面回调以 `LV_EVENT_ALL` 注册，收到 DELETE 后继续解引用已置 NULL 的 `p->data`。
+- 归属：UI / page_mgr / pg_pcdial。
+- 修复方式：1) `pm_delete_page` 顺序改为先删对象树后释放数据（CUR-003 缓解，已核对 12 个页面 destroy 均不访问 root）；2) filter=ALL 的页面回调入口拦截 `LV_EVENT_DELETE`。
+- 当前状态：已修复。防回退：以 ALL 注册的页面回调必须拦截 DELETE 事件；新增页面回调时同检。
+
+## BUG-026（Regression）"电机档位即值"页面快转瞬时越界写非法值
+
+- 现象：HASS 空调温度快转出现 31/15、风速 `ac_fan` 越界索引 `ac_fan_names[4]`；设置页亮度保存 9/101、熄屏 -1 分钟。
+- 根因：端点制动拉回前 `motor_get_position()` 会短暂越过量程；页面直接采用未钳制。
+- 归属：UI / pg_hass / pg_setting。
+- 修复方式：读电机位置后按模式量程钳制（温度 16..30、风速 0..3、亮度 10..100、分钟 0..30）。
+- 当前状态：已修复。防回退：任何"电机档位即值"页面必须钳制，规则见 ARCHITECTURE.md §22 第 22 条。
+
+## BUG-027（Baseline，安全）急停命令可能被命令队列静默丢弃
+
+- 现象：命令队列满（8 条）时 `motor_disable()` 走 FIFO 尾部入队 20ms 后被丢弃，力反馈继续生效。
+- 归属：Motor。
+- 修复方式：急停改 `xQueueSendToFront` 插队，队满挤掉最旧普通命令。
+- 当前状态：已修复。防回退：安全命令不得排 FIFO 尾部。
+
+## BUG-028（Baseline）SCD40 持续总线错误不触发自愈
+
+- 现象：I2C 持续故障（非"未就绪"）时 `not_ready_count` 不增长，60 秒自愈流程永不运行，传感器永久静默。
+- 修复方式：自愈计数前移，总线错误与 CRC 错误路径同样累计。
+- 当前状态：已修复。
+
+## BUG-029（Baseline）MQTT discovery 定时器与 reinit 竞争（use-after-free）
+
+- 现象：discovery 序列发送期间（30+ 条 × 400ms）Web 保存配置触发 `mqtt_ha_reinit`，esp_timer 回调在锁外使用刚被 destroy 的 client。
+- 归属：MQTT。
+- 修复方式：`disc_timer_cb` try-take `s_client_mux`（esp_timer 不可阻塞），拿不到跳过本轮。
+- 当前状态：已修复。
+
+## BUG-030（Baseline）hass_cfg 名称占满截断宽度时无 NUL 终止
+
+- 现象：设备名恰为 18 字节时 `name` 数组无终止符，后续 `snprintf`/UI 显示越界读。
+- 归属：hass_cfg 解析器。
+- 修复方式：memcpy 前强制 `buf[nl]=0`。
+- 当前状态：已修复。
+
+## BUG-031（Baseline）sysmon 在关中断临界区内调用堆函数（潜在死锁）
+
+- 现象：`heap_caps_*` 内部取堆互斥锁；若持锁任务恰在 tick 切换时被换下，关中断的 sysmon 无法再调度 → 死锁。
+- 归属：sysmon。
+- 修复方式：堆采样移出临界区，临界区只保护快照字段写入。
+- 当前状态：已修复。
+
+## BUG-032（Baseline）wifi_ap_fallback_stop 在事件任务中 abort
+
+- 现象：`ESP_ERROR_CHECK(esp_wifi_set_mode(STA))` 在 GOT_IP 事件任务失败时直接 panic 重启整机。
+- 修复方式：改为记录日志（模式切换时序敏感，下次断线流程自愈）。
+- 当前状态：已修复。
+
 ---
 
 # 当前静态分析发现
 
-以下问题不是凭空推测，均来自当前源码、构建配置或 Kconfig 映射。本次任务只同步文档，不修改业务代码。
-
-## CUR-001 当前 LVGL 仍实际使用 builtin 64 KB allocator
+## CUR-001 当前 LVGL 仍实际使用 builtin 64 KB allocator（未修复）
 
 - 证据：构建产物同时存在 `CONFIG_LV_USE_STDLIB_MALLOC=1` 和 `CONFIG_LV_USE_BUILTIN_MALLOC=1`。
 - 原因：LVGL 9.2 的 `lv_conf_kconfig.h` 先根据 `CONFIG_LV_USE_BUILTIN_MALLOC` 把 `CONFIG_LV_USE_STDLIB_MALLOC` 定义为 `LV_STDLIB_BUILTIN`。
 - 影响：设计中的 CLIB + PSRAM 迁移没有生效；LVGL 对象分配仍受 64 KB builtin pool 限制。
 - 状态：当前风险。需要单独修复配置并重新验证，不能直接宣称已解决。
 
-## CUR-002 Web 环境历史时间轴间隔错误
+## CUR-002 Web 环境历史时间轴间隔错误（已修复）
 
-- 证据：`env_hist.c` / `env_hist.h` 的日级缓冲按 60 秒写入；`webcfg.c` 的 `/api/envhist` 返回 `"iv_s":300`。
-- 影响：浏览器按 5 分钟间隔绘制，实际数据点是 1 分钟间隔，时间轴和鼠标悬浮值会错位。
-- 状态：当前风险。未修改代码。
+- 历史：`/api/envhist` 返回 `"iv_s":300`，日级缓冲实际 60 秒/点，浏览器时间轴错 5 倍。
+- 当前状态：已修复；`webcfg.c` 返回 `iv_s:60`，前端 `ED.iv_s||60` 兜底与真实间隔一致。
 
-## CUR-003 page pop 在动画 ready 回调中删除页面
+## CUR-003 page pop 在动画 ready 回调中删除页面（已缓解，形态保留）
 
 - 证据：`pm_pop_anim_done()` 删除页面并释放页面数据。
-- 影响：与“动画回调中不要删除 LVGL 对象”的硬约束冲突。当前实现可能与已有对象宿主有关，但不能把这种模式推广到其他动画对象。
-- 状态：当前风险，待单独分析 LVGL 动画链表和页面生命周期后处理。
+- 2026-09 缓解：`pm_delete_page` 顺序改为"先删对象树后释放数据"——`LV_EVENT_DELETE` 广播期间页面数据仍有效，页面回调（含 filter=ALL）可安全读取；回调业务操作由事件码拦截（BUG-025）。
+- 状态：形态保留，彻底重构（不在动画回调中删页）待做；S-Dial 的实际爆发已消除。
 
-## CUR-004 设置页重新校准在 LVGL 回调中阻塞 600 ms
+## CUR-004 设置页重新校准在 LVGL 回调中阻塞 600 ms（已修复）
 
-- 证据：`pg_setting.c` 的 Motor 重新校准路径执行 `vTaskDelay(pdMS_TO_TICKS(600))` 后重启。
-- 影响：短暂阻塞 UI，违反 UI 回调不做长阻塞的约束。
-- 状态：当前风险。由于随后重启，影响窗口有限，但仍应移除或改为非阻塞重启流程。
+- 当前状态：已修复；改为一次性 `lv_timer`（600ms）回调中 `esp_restart()`，提示先渲染，不再阻塞 UI。
 
 ## CUR-005 主菜单文案与模式数不一致（已解决）
 
-- 历史：`pg_menu.c` 曾写“11 种手感模式”，而实际为 12；新增 `MOTOR_MODE_ADJUSTER` 后为 13。
+- 历史：`pg_menu.c` 曾写"11 种手感模式"，而实际为 12；新增 `MOTOR_MODE_ADJUSTER` 后为 13。
 - 当前状态：已解决；`pg_menu` 副标题已更新为 13，与 `motor_get_mode_count()` 一致。
 
-## CUR-006 `README.md` 与当前代码不一致
+## CUR-006 `README.md` 与当前代码不一致（未更新）
 
-- 证据：README 仍写 PSRAM 未启用、SPI 20 MHz、11 种模式和旧依赖。
-- 影响：新开发者可能按 README 得到错误硬件和功能结论。
-- 状态：本文档同步未修改 README；README 需要单独更新。
+- 证据：README 仍写 PSRAM 未启用、SPI 20 MHz、11 种模式和旧依赖；本系列又新增 S-Dial 模式循环等未入 README。
+- 状态：README 需要单独更新。
 
 ## CUR-007 Motor 命令入队存在最多 20 ms 有界等待
 
 - 证据：`post_cmd()` 使用 `xQueueSend(..., pdMS_TO_TICKS(20))`。
-- 影响：调用方通常不是长期阻塞，但 UI 或网络任务在队列满时仍可能等待最多 20 ms，因此不能把该 API 描述成严格零等待。
-- 状态：当前风险。队列长度 8 和命令频率较低时影响有限，但实时性审计必须考虑该边界。
+- 状态：仍存在。另注意：安全命令（急停）已改 `xQueueSendToFront` 插队（BUG-027），普通命令仍为 FIFO 尾部入队。
 
 ---
 
@@ -261,6 +321,14 @@
 14. 不把代码存在或编译通过写成硬件已验证。
 15. 不把 Web 恢复出厂描述成全 NVS 擦除；它当前只清 `webcfg`。
 16. 环境历史当前使用固定间隔推时间，没有每个样本的绝对时间戳；新增 API 前不得假装已有真实时间戳。
+17. BLE HID 报文一律纯数据，不带 Report ID 前缀（BUG-024）；dial TLC 为 Button1+Touch 双位。
+18. HID 报文或 Report Map 变更后必须改 PnP PID 强制 Windows 重新枚举，并要求用户删设备重配对。
+19. filter=ALL 的页面回调必须拦截 `LV_EVENT_DELETE`（BUG-025）。
+20. "电机档位即值"页面读 `motor_get_position()` 后必须按量程钳制（BUG-026）。
+21. 安全命令（急停）用 `xQueueSendToFront` 插队（BUG-027）。
+22. esp_timer 回调访问共享资源用 try-take 锁，不阻塞（BUG-029）。
+23. `pm_delete_page` 顺序保持"先删对象树后释放数据"，页面 destroy 不得访问 `p->root`。
+24. 传感器自愈计数覆盖总线错误路径（BUG-028）。
 
 ---
 
@@ -271,15 +339,16 @@
 | 首次烧录 | `erase-flash` 后烧录 | 分区表已变更，待实机确认 |
 | 触摸 IC | 开机 selftest + 工厂测试原始值 | 待实机确认是否存在并接线正确 |
 | 触摸方向 | 四点校准和四角点击 | 待实机确认 |
-| BLE 配对 | Windows/macOS 搜索 SmartKnob | 待实机确认 |
-| S-Dial 音量 | `pg_pcdial` 旋转 | 待实机确认 |
-| S-Dial 滚轮 | 切换滚轮模式后旋转 | 待实机确认 |
-| 媒体控制 | 播放暂停、上一首、下一首 | 待实机确认 |
+| BLE 配对 | Windows/macOS 搜索 SmartKnob | 部分实测：删除重配对流程已验证 |
+| S-Dial 切歌/音量 | 切歌（默认）/音量模式旋转 | 实测已可用（2026-09 实机） |
+| S-Dial 滚轮 | 滚轮模式旋转（顺时针=向下） | 已修复方向，待复测 |
+| S-Dial 表盘 | 表盘模式旋转/系统菜单/重配对生效 | 旋转已可用；长按菜单待复测 |
+| 播放暂停 | 中央短按（表盘/切歌/音量/滚轮模式） | 待复测（表盘短按补发媒体键为新行为） |
 | 菜单聚焦动画 | 主菜单旋转和触摸滑动 | 待实机确认 |
-| Motor 闭环/力反馈 | `pg_playground` 12 模式 | 待实机确认 |
+| Motor 闭环/力反馈 | `pg_playground` 13 模式 | 待实机确认 |
 | WiFi/AP 配网 | STA 连接、90 秒回退、192.168.4.1 | 待实机确认 |
-| MQTT/HA Discovery | 3 个 sensor + 8 个 device_automation + level 通道 | 待实机确认 |
-| Web/OTA | `/status`、`/api/envhist`、`/ota` | 待实机确认 |
+| MQTT/HA Discovery | sensor + device_automation + level 通道 | 待实机确认 |
+| Web/OTA | `/status`、`/api/envhist`（60s 间隔）、`/ota` | 待实机确认 |
 | LED | WiFi/MQTT 状态色和工厂测试 | 待实机确认 |
 | 长时间稳定性 | 连续运行、heap poisoning 日志、WDT | 待实机确认 |
 

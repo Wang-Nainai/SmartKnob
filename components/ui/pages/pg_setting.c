@@ -299,6 +299,12 @@ static void setting_row_press_cb(lv_event_t *e)
     lv_indev_get_point(lv_indev_active(), &press_pt);
 }
 
+static void cal_restart_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    esp_restart();
+}
+
 static void setting_row_cb(lv_event_t *e)
 {
     lv_point_t now;
@@ -326,8 +332,8 @@ static void setting_row_cb(lv_event_t *e)
             motor_clear_calibration();
             setting_set_val(d, SET_CAL,
                             "\xE6\xA0\xA1\xE5\x87\x86\xE4\xB8\xAD\xE5\xB0\x86\xE9\x87\x8D\xE5\x90\xAF"); /* 校准中即将重启 */
-            vTaskDelay(pdMS_TO_TICKS(600));   /* 让提示渲染出来 */
-            esp_restart();
+            /* 非阻塞延迟重启: 让提示先渲染, 不得在 LVGL 回调中 vTaskDelay */
+            lv_timer_create(cal_restart_timer_cb, 600, NULL);
         } else {
             cal_pending_until = now + 4000;
             setting_set_val(d, SET_CAL,
@@ -375,9 +381,15 @@ static void setting_timer_cb(lv_timer_t *t)
 
     int32_t pos = motor_get_position();
     if (d->edit_item == SET_BRIGHTNESS) {
+        /* 快转瞬间端点制动未拉回, position 可短暂越界(9/101):
+         * 不钳制会把非法值写进 NVS 并显示 "9 %"/"101 %" */
+        if (pos < 10) pos = 10;
+        if (pos > 100) pos = 100;
         d->brightness = pos;
         display_set_brightness(pos);   /* 实时预览 */
     } else {
+        if (pos < 0) pos = 0;
+        if (pos > 30) pos = 30;
         d->timeout_min = pos;
     }
     setting_edit_visual(d);

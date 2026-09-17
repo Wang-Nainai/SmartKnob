@@ -270,7 +270,13 @@ void wifi_ap_fallback_stop(void)
     }
     s_ap_active = false;
     app_state_set_ap(false, NULL, NULL);
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    /* 在 GOT_IP 事件任务上下文调用: 不得 abort —— 模式切换时序敏感,
+     * 失败记录日志, 下次断线/重连流程自愈 */
+    esp_err_t err = esp_wifi_set_mode(WIFI_MODE_STA);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "AP->STA mode switch failed: %s (0x%X)",
+                 esp_err_to_name(err), (unsigned)err);
+    }
     ESP_LOGI(TAG, "AP fallback OFF (STA connected)");
 }
 

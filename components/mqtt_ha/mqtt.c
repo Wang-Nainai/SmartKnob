@@ -130,6 +130,15 @@ static void disc_timer_cb(void *arg)
     if (!s_connected || !s_client) {
         return;
     }
+    /* esp_timer 回调不可阻塞: try-take 失败说明 reinit 正在销毁 client,
+     * 跳过本轮(400ms 后重试), 防止检查与 publish 之间 client 被 destroy */
+    if (!s_client_mux || xSemaphoreTake(s_client_mux, 0) != pdTRUE) {
+        return;
+    }
+    if (!s_connected || !s_client) {
+        xSemaphoreGive(s_client_mux);
+        return;
+    }
     if (s_disc_i < (int)LEGACY_TRIG_NUM) {
         /* 清理历史遗留触发器 */
         char topic[160];
@@ -138,16 +147,17 @@ static void disc_timer_cb(void *arg)
                  s_legacy_trigs[s_disc_i]);
         esp_mqtt_client_publish(s_client, topic, "", 0, 1, 1);
         s_disc_i++;
-        return;
-    }
-    int trig_i = s_disc_i - (int)LEGACY_TRIG_NUM;
-    if (s_dev_num > 0 && trig_i < s_dev_num * 2) {
-        publish_trigger_one(s_client, trig_i / 2, (trig_i % 2) ? "off" : "on");
-        s_disc_i++;
     } else {
-        esp_timer_stop(s_disc_timer);
-        ESP_LOGI(TAG, "discovery complete (%d msgs)", s_disc_i);
+        int trig_i = s_disc_i - (int)LEGACY_TRIG_NUM;
+        if (s_dev_num > 0 && trig_i < s_dev_num * 2) {
+            publish_trigger_one(s_client, trig_i / 2, (trig_i % 2) ? "off" : "on");
+            s_disc_i++;
+        } else {
+            esp_timer_stop(s_disc_timer);
+            ESP_LOGI(TAG, "discovery complete (%d msgs)", s_disc_i);
+        }
     }
+    xSemaphoreGive(s_client_mux);
 }
 
 /* ---------------- HA → 旋钮 命令 (smartknob/cmnd/<cmd>) ---------------- */

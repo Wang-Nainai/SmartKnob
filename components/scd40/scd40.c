@@ -120,11 +120,19 @@ esp_err_t scd40_restart_measurement(void)
 
 esp_err_t scd40_data_ready(bool *ready)
 {
+    /* 计数移到最前: 持续性 I2C 总线错误(而非"未就绪")也计入,
+     * 使 60s 自愈流程同样覆盖总线级故障 */
+    static uint32_t not_ready_count = 0;
     uint8_t cmd[2] = { SCD40_CMD_DATA_READY >> 8, SCD40_CMD_DATA_READY & 0xFF };
     uint8_t buf[3];
     esp_err_t err = i2c_master_transmit_receive(s_dev, cmd, sizeof(cmd), buf, sizeof(buf), 200);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "data-ready tx/rx failed, err=0x%X", err);
+        if (not_ready_count++ >= 30) {
+            ESP_LOGW(TAG, "no data (bus err) for 60s, recovering sensor");
+            scd40_restart_measurement();
+            not_ready_count = 0;
+        }
         return err;
     }
     if (!scd40_verify_crc(buf, 1)) {
@@ -133,7 +141,6 @@ esp_err_t scd40_data_ready(bool *ready)
     }
     uint16_t status = (uint16_t)((buf[0] << 8) | buf[1]);
     *ready = (status & 0x7FF) != 0;  /* SCD4x: least-significant 11 bits non-zero => data ready */
-    static uint32_t not_ready_count = 0;
     if (!*ready) {
         if (not_ready_count++ % 5 == 0) {
             ESP_LOGI(TAG, "data not ready, status=0x%04X", status);

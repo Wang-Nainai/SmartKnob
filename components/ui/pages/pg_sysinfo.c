@@ -132,6 +132,14 @@ static void pg_sysinfo_on_back(page_t *p)
     pm_pop();
 }
 
+static void pg_sysinfo_on_resume(page_t *p)
+{
+    (void)p;
+    /* 从工厂测试返回后重新声明本页电机模式(factory 是 UNBOUNDED_DETENTS,
+     * 不恢复会残留子页手感) */
+    motor_set_mode(MOTOR_MODE_UNBOUND_NO_DETENTS, 0, 0);
+}
+
 static void pg_sysinfo_on_tick(page_t *p)
 {
     sysinfo_update((sysinfo_data_t *)p->data);
@@ -142,6 +150,6 @@ const page_ops_t pg_sysinfo_ops = {
     .destroy = pg_sysinfo_destroy,
     .on_rotate = pg_sysinfo_on_rotate,
     .on_back = pg_sysinfo_on_back,
-    .on_resume = NULL,
+    .on_resume = pg_sysinfo_on_resume,
     .on_tick = pg_sysinfo_on_tick,
 };
