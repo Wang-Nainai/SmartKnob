@@ -323,11 +323,21 @@
   （上电 1000ms / stop 后 800ms / reinit 后 30ms）。持续性 0x0000 指向
   传感器硬件状态（焊接/供电/芯片劣化），需替换或换线验证。
 - 修复方式：1) 自愈退避 —— 连续自愈失败 2 次后间隔 60s→180s（有数据即复位）；
-  2) **ready 判定放宽为整字非零** —— datasheet 写 ready=bit11(0x800)，实测
-  该模块 ready 时一拍回报 0x8000(bit15) 被 `&0x7FF` 误判 not ready；放宽后
-  误判代价只是多读一次测量，垃圾数据由 read_measurement 的 CRC 校验拦截。
-- 当前状态：固件侧已修（退避 + 判定放宽），烧录验证中；若仍无数据则传感器
-  本体需硬件排查（换线/替换验证）。
+  2) ready 判定回归 datasheet 精确位 bit11 (0x0800)（放宽 status!=0 属
+  错误归因，BUG-040 修复后真因是上电时序）。
+- 当前状态：已修复（v1.0.0-17 实测 CO2 正常上报）。
+
+## BUG-043（Regression）ready 判定后立即读测量，I2C 命令间隔不足导致超时刷屏
+
+- 现象：`read-meas tx/rx failed, err=0x103`（ESP_ERR_TIMEOUT）每 5~6 秒刷屏，
+  但数据周期性正常上报（约每 3 拍成功一次）。
+- 根因：`scd40_data_ready(0xE1B8)` 返回 ready 后**立即**发
+  `read_measurement(0x0344)`——两次 I2C 命令间隔 <1ms，违反 Sensirion
+  命令间隔要求，sensor 对第二个命令 NACK/超时。v1.0.0-16 偶发成功恰因
+  前次失败的超时（200ms）充当了间隔。
+- 修复方式：`scd40_task` 在判定 ready 与 read 之间加 `vTaskDelay(2ms)`。
+- 当前状态：已修复（编译验证）。防回退：**任何 Sensirion 命令序列之间
+  都要保证 >=1ms 间隔**，连续 I2C 命令连发是这类传感器的通用陷阱。
 
 ## BUG-040（Regression）越界红弧错位/显示不全 —— red_arc 的 bg_angles 钳制
 

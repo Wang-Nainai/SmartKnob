@@ -52,6 +52,10 @@ static void scd40_task(void *arg)
         if (scd40_data_ready(&ready) != ESP_OK || !ready) {
             continue;
         }
+        /* Sensirion 命令间隔 >=1ms: get_data_ready(0xE1B8) 后立即发
+         * read_measurement(0x0344) 会 NACK/超时 (实测 err=0x103 刷屏),
+         * v1.0.0-16 偶发成功的那次恰因前次失败自带 200ms 超时间隔 */
+        vTaskDelay(pdMS_TO_TICKS(2));
         if (scd40_read(&data) == ESP_OK) {
             ESP_LOGI(TAG, "CO2=%u ppm, T=%.1f C, RH=%.1f %%",
                      data.co2_ppm, data.temperature_c, data.humidity_pct);
