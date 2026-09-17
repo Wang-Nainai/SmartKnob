@@ -16,6 +16,10 @@
 
 #define TASK_ARRAY_MAX   SYSMON_MAX_TASKS
 #define SAMPLE_PERIOD_MS 1000
+/* uxTaskGetSystemState 挂起双核调度并逐任务扫描栈水印, 多任务+coex 场景
+ * 下长时间占用双核 spinlock (实测触发 IWDT panic 重启) —— 每 N 轮才重扫描
+ * 一次, 其余轮次复用上一轮任务表渲染 */
+#define TASK_SCAN_DIV    5
 
 typedef struct {
     TaskHandle_t handle;
@@ -45,6 +49,24 @@ void sysmon_get_snapshot(sysmon_snapshot_t *out)
 
 static void sample_once(void)
 {
+    static int scan_div = 0;
+    if ((scan_div++ % TASK_SCAN_DIV) != 0 && s_prev_count > 0) {
+        /* 非重扫描轮: 保留上一轮任务表, 只重算内存字段 */
+        uint32_t int_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        uint32_t int_total = heap_caps_get_total_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        uint32_t ps_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+        uint32_t ps_total = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
+        uint32_t min_free = esp_get_minimum_free_heap_size();
+        portENTER_CRITICAL(&s_snap_mux);
+        s_snap.int_free = int_free;
+        s_snap.int_total = int_total;
+        s_snap.ps_free = ps_free;
+        s_snap.ps_total = ps_total;
+        s_snap.min_free = min_free;
+        portEXIT_CRITICAL(&s_snap_mux);
+        return;
+    }
+
     uint32_t total = 0;
     UBaseType_t n = uxTaskGetSystemState(s_states, TASK_ARRAY_MAX, &total);
     if (n == 0) {

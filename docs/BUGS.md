@@ -299,6 +299,33 @@
   env_hist 读者为 UI/HTTP，撕裂只影响个别数据点；display 熄屏竞态的残留
   窗口会被下一次触摸/旋转的 notify_activity 自愈。
 
+## BUG-038（Regression）进入系统监控偶发 IWDT panic 重启
+
+- 现象（实机）：进入 pg_sysmon 约 300ms 后触发
+  `Interrupt wdt timeout on CPU0`，整机重启。backtrace：
+  `prvTaskCheckFreeStackSpace → uxTaskGetSystemState → sample_once`。
+- 根因：`uxTaskGetSystemState` 挂起双核调度并逐任务扫描栈水印，多任务 +
+  BLE/WiFi coex 场景下长时间占用双核 spinlock；默认 300ms 的
+  `CONFIG_ESP_INT_WDT_TIMEOUT_MS` 在该窗口内触发（core1 SysTick 的
+  `xTaskIncrementTickOtherCores` 自旋等待画面与此吻合）。
+- 修复方式：1) `CONFIG_ESP_INT_WDT_TIMEOUT_MS` 300→900（SDK 与 FreeRTOS
+  包装两处，defaults 同步）；2) sysmon 重扫描降频 1Hz→0.2Hz（每 5 轮才做
+  一次 `uxTaskGetSystemState`，其余轮次复用上一轮任务表、仅刷新内存字段）。
+- 当前状态：已修复（编译验证）。防回退：sysmon 的重扫描降频与 IWDT 加宽
+  不可回退；若其它模块再引入 `uxTaskGetSystemState` 需同样节流。
+
+## BUG-039（Baseline）SCD40 持续 not ready，自愈循环反复无效
+
+- 现象：上电等待 1000ms 后 start_periodic 成功，但 `get_data_ready` 持续
+  0x0000（一拍 0x8000 瞬态），60s 自愈循环反复 stop→reinit→start 拉不回。
+- 分析：CRC 校验通过说明是传感器真实响应；固件侧时序已按 datasheet
+  （上电 1000ms / stop 后 800ms / reinit 后 30ms）。持续性 0x0000 指向
+  传感器硬件状态（焊接/供电/芯片劣化），需替换或换线验证。
+- 修复方式：自愈退避 —— 连续自愈失败 2 次后间隔 60s→180s（有数据即复位），
+  避免每 60 秒反复 stop/reinit 折腾传感器；无数据的状态字日志降频到每
+  5 拍一条。
+- 当前状态：固件侧退避已加；传感器本体需硬件排查（换线/替换验证）。
+
 ---
 
 # 当前静态分析发现

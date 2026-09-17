@@ -126,19 +126,19 @@ static void pg_refresh_fill(pg_data_t *d, int32_t pos)
     int32_t end = d->win_deg0 + (int32_t)(((int64_t)v * d->win_span) / vmax);
     lv_arc_set_angles(d->range_arc, d->win_deg0, end);
 
-    /* 红弧: 位置停在边界档 且 档内偏移朝界外, 幅值封顶 60°、
-     * 最短可视 20° (端点制动拉回下实际越界角只有 10-30°, 原封顶 30°
+    /* 红弧: 位置停在边界档 且 档内偏移朝界外, 幅值封顶 90°、
+     * 最短可视 25° (端点制动拉回下实际越界角只有 10-40°, 原封顶 30°
      * 且无下限导致"很短一截"几乎不可见) */
     int32_t o = (int32_t)off;
-    if (o > 60) o = 60;
-    if (o < -60) o = -60;
+    if (o > 90) o = 90;
+    if (o < -90) o = -90;
     bool oob_min = (pos <= d->win_min && o > 0);
     bool oob_max = (pos >= d->win_max && o < 0);
     if (oob_min) {
-        int32_t shown = (o < 20) ? 20 : o;
+        int32_t shown = (o < 25) ? 25 : o;
         lv_arc_set_angles(d->red_arc, d->win_deg0 - shown, d->win_deg0);
     } else if (oob_max) {
-        int32_t shown = (o > -20) ? -20 : o;
+        int32_t shown = (o > -25) ? -25 : o;
         lv_arc_set_angles(d->red_arc, d->win_deg0 + d->win_span,
                           d->win_deg0 + d->win_span - shown);
     } else {
@@ -279,12 +279,12 @@ static void pg_playground_create(page_t *p)
     lv_obj_set_style_radius(d->dot, LV_RADIUS_CIRCLE, 0);
     lv_obj_clear_flag(d->dot, LV_OBJ_FLAG_CLICKABLE);
 
-    /* 中央大数值 (表盘正中央) */
+    /* 中央大数值 (+4px: 数字无下伸部, 几何居中在表盘内视觉偏上) */
     d->label_value = lv_label_create(p->root);
     lv_obj_set_style_text_color(d->label_value, lv_color_hex(XK_COLOR_TEXT), 0);
     lv_obj_set_style_text_font(d->label_value, &lv_font_montserrat_48, 0);
     lv_label_set_text(d->label_value, "0");
-    lv_obj_align(d->label_value, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_align(d->label_value, LV_ALIGN_CENTER, 0, 4);
 
     pg_apply_mode(d);
     d->timer = lv_timer_create(pg_playground_timer, 50, d);
