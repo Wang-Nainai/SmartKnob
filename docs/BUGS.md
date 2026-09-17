@@ -343,6 +343,19 @@
   任何"只在特定角度画弧"的 arc，其 bg_angles 必须覆盖全部可能的绘制区间
   （与 BUG-022 同源的第二因子）。
 
+## BUG-042（Regression）sysmon 快照锁配对错误导致页面全零卡死
+
+- 现象：进系统监控后所有数据 0%、页面无更新（LVGL 的 get_snapshot 永久阻塞）。
+- 根因：重扫描降频改造时把两处 `portENTER_CRITICAL` 都替换成
+  `xSemaphoreTake`，但 `give` 只保留一处 —— 每轮重扫描净泄漏一次锁，
+  sysmon_task 永久持有 `s_snap_mux`，LVGL 任务的 `sysmon_get_snapshot`
+  阻塞在 `portMAX_DELAY` 上，页面永远停留在创建时的初始值。
+- 归属：sysmon（BUG-038 重构的引入错误）。
+- 修复方式：重扫描路径的任务表增量计算段不加锁（`s_prev`/`s_states` 为
+  sysmon_task 私有），锁只保护"发布 s_snap"的瞬间 —— take/gift 严格配对。
+- 当前状态：已修复（锁配对三组全验证）。防回退：同一临界资源的多处加锁
+  必须在改动后逐一核对 take/give 配对，禁止一处锁保护两段不连续代码。
+
 ## BUG-041（信息）表盘页眉尾文字与数字的跨页统一
 
 - 现象：各表盘页的顶部标题、底部提示、中央数字位置不统一
