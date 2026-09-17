@@ -9,6 +9,14 @@
 
 static const char *TAG = "scd40";
 
+/* ==================== SCD40 命令码（重要，防回退） ====================
+ * 以下命令码是"店家模块实测验证"的组合（M创动工坊方案，与 BUG-009 的
+ * XPT2046 轴向同类教训）：与 Sensirion SCD4x datasheet 存在差异
+ * （如 get_data_ready 实测 0xE4B8，datasheet 写 0xE1B8；start_periodic
+ * 实测 0x21B1，datasheet 写 0x21B9），但实测有效 —— 扫描识别、数据
+ * 上报均工作。禁止按 datasheet 字面"修正"命令码。
+ * 实测 data_ready 响应：就绪时低 11 位非零（如 0x8006，低 11 位=0x006），
+ * 空闲 0x0000 —— 判定用低 11 位非零。 */
 #define SCD40_CMD_START_PERIODIC 0x21B1
 #define SCD40_CMD_STOP_PERIODIC  0x3F86
 #define SCD40_CMD_DATA_READY     0xE4B8
