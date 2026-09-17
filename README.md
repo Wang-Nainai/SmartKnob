@@ -109,13 +109,24 @@ idf.py -p COMx flash monitor
   校准与 NVS 设计、防回退规则（改代码前先读）
 - [`docs/BUGS.md`](docs/BUGS.md) —— 历史 Bug 记录、根因、回归防护、硬件实测清单
 
-## 致谢
+## 致谢与第三方声明
 
-- [scottbez1/SmartKnob](https://github.com/scottbez1/SmartKnob) —— 力反馈旋钮思路与算法参考
-- [SmallPond/X-Knob](https://github.com/SmallPond/X-Knob) —— UI 风格与 Surface Dial 方案参考
-- [esp32-surface-dial](https://github.com/) / [super-dial](https://github.com/) —— Surface Dial HID 协议实测参考
-- Espressif esp-iot-solution `usb_surface_dial` —— 官方 Surface Dial 描述符参考
-- SimpleFOC、LVGL 及 ESP-IDF 社区
+本项目站在这些开源项目的肩膀上（按借鉴内容标注许可证与范围）：
+
+| 项目 | 许可证 | 借鉴内容 |
+|---|---|---|
+| [scottbez1/SmartKnob](https://github.com/scottbez1/SmartKnob) | 见其仓库 | 力反馈旋钮思路、手感参数体系（未复制代码，算法自行实现） |
+| [SmallPond/X-Knob](https://github.com/SmallPond/X-Knob) | MIT | LVGL UI 风格（三副本循环列表/Apple 风格表盘）、页面架构思路 |
+| [esp32-surface-dial](https://github.com/) | Apache-2.0 | Surface Dial BLE HID 协议验证参考 |
+| [super-dial](https://github.com/) | MIT | ESP32-S3 Surface Dial 量产实现参考 |
+| [Surface_Dial_Arduino](https://github.com/)（含 TrinketHidCombo，GPL-3.0） | AGPL-3.0 / GPL-3.0 | Rudimentary Dial 报文约定与描述符形态参考 |
+| [Espressif esp-iot-solution `usb_surface_dial`](https://github.com/espressif/esp-iot-solution) | Apache-2.0 | 官方 Surface Dial HID 描述符与报文编码参考 |
+
+第三方编译依赖（随 `main/idf_component.yml` 自动拉取，各组件自带许可证文件）：
+LVGL 9.2.0（MIT）、esp_simplefoc 1.4.1（MIT）、ESP-IDF 5.5.5（Apache-2.0）。
+
+本项目自身代码以 [GPL-3.0](LICENSE) 发布——该许可与上述所有参考项目的许可证兼容；
+如认定某借鉴构成衍生，其原始许可义务（保留版权声明/许可文本）依各项目条款履行。
 
 ## 许可证
 
