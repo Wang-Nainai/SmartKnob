@@ -74,7 +74,6 @@ components/
   env_hist/    环境历史环形缓冲（PSRAM）
   app_state/   跨任务环境/网络状态快照
   led/         WS2812 状态灯（RMT，多任务互斥）
-  sysmon/      系统监控采样
 ```
 
 ## 构建与烧录

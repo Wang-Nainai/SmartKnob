@@ -66,7 +66,6 @@ main
   ├─ motor           BLDCMotor 唯一所有者 + haptic command queue
   ├─ scd40           CO2/温度/湿度采集
   ├─ env_hist        PSRAM 双环形历史缓冲
-  ├─ sysmon          FreeRTOS/内存采样
   ├─ wifi            STA 无限重连 + SoftAP 配网回退
   ├─ blehid          NimBLE BLE HID
   ├─ mqtt_ha         MQTT / HA Discovery / 下行命令
@@ -110,8 +109,6 @@ UI 环境页       Home Assistant      设备趋势图 / Web 趋势图
 nvs_flash_init
   ↓
 app_state_init
-  ↓
-sysmon_init（创建后等待页面使能）
   ↓
 led_init
   ↓
@@ -495,7 +492,6 @@ MQTT
 | `pg_env` | CO2、温湿度、等级卡和 2 小时趋势图；旋转或点击切换 CO2/温度/湿度 |
 | `pg_setting` | 亮度、熄屏时长、系统监控、蓝牙清除配对、Motor 重新校准 |
 | `pg_sysinfo` | 版本、IP、MQTT、运行时长、熄屏配置、构建时间、Web 地址和工厂测试入口 |
-| `pg_sysmon` | CPU、内部 RAM、PSRAM、历史最小空闲和任务表；退出后采样任务挂起 |
 | `pg_apcfg` | SoftAP 配网页；显示热点名、访问 URL 和二维码 |
 | `pg_tcal` | 四点触摸校准；旋钮累计 12 格可跳过 |
 | `pg_factory` | 触摸、LED、Motor、编码器、SCD40、WiFi/MQTT 的现场测试入口 |
@@ -1080,7 +1076,6 @@ NVS 全盘擦除只有启动时 `ESP_ERR_NVS_NO_FREE_PAGES` / `ESP_ERR_NVS_NEW_V
 | `LVGL` | 0 | 8 | 6144 | LVGL timer、渲染、页面、Input 消费 |
 | `knob_input` | 0 | 1 | 2048 | 5 ms 轮询 Motor 快照 |
 | `scd40` | 0 | 3 | 4096 | SCD40 数据读取 |
-| `sysmon` | 0 | 1 | 4096 | 页面开启时 1 Hz 采样；平时挂起 |
 | NimBLE host | 0 | 协议栈默认 | 4096 | `CONFIG_BT_NIMBLE_PINNED_TO_CORE=0` |
 | WiFi task | 0 | 协议栈默认 | 协议栈配置 | `CONFIG_ESP_WIFI_TASK_PINNED_TO_CORE_0=y` |
 | MQTT task | 未显式绑定 | 协议栈默认 | 4096 | 项目代码未设置 core affinity |
@@ -1091,41 +1086,23 @@ NVS 全盘擦除只有启动时 `ESP_ERR_NVS_NO_FREE_PAGES` / `ESP_ERR_NVS_NEW_V
 - Motor loop 不被 UI、网络、传感器或日志长阻塞。
 - LVGL 任务不执行同步网络请求、大块文件 IO 或长 `delay`。
 - MQTT callback、BLE callback 和实时任务不进行大 JSON 拼接或长时间等待。
-- Sysmon 默认挂起，只有进入 `pg_sysmon` 才启用。
 - LED RMT 发送使用 mutex 串行化，避免 WiFi、MQTT、UI、HTTP 并发调用。
 
 当前已知阻塞点：`pg_setting` 的 Motor 重新校准双击确认路径在 LVGL 回调中执行 `vTaskDelay(600 ms)` 后重启。该等待违反“UI 回调不做长阻塞”的约束，但本次文档同步不修改代码。
 
 ---
 
-## 19. 系统监控
+## 19. 系统监控（已移除）
 
-`sysmon` 使用静态缓冲，任务创建后等待 notification；页面进入调用 `sysmon_set_enabled(true)`，退出调用 `false` 使任务挂起。
+`pg_sysmon` 页面与 `sysmon` 组件已于 2026-09 移除（BUG-042/BUG-038 两次
+实机崩溃后评估）：该功能对最终用户几乎无价值，而其核心 API
+`uxTaskGetSystemState` 挂起双核调度并逐任务扫描栈水印，是全系统最重的
+调用，先后引发 IWDT panic 与 spinlock count assert 两个实机重启问题。
 
-当前页面显示：
-
-```text
-CPU0
-CPU1
-CPU 平均
-内部 RAM
-PSRAM
-历史最小空闲内存
-任务表
-```
-
-任务表当前显示：
-
-```text
-任务名
-CPU
-栈剩余
-Core + 状态
-```
-
-可见窗口为 16 行，旋钮虚拟滚动，不是 16 个独立任务对象和 64 个小标签。
-
-当前实现没有采集或显示芯片温度，也没有独立的“最大连续内存块”字段；`min_free` 是系统历史最小空闲内存。旧文档若写有这两项，应视为尚未实现。
+替代的诊断手段：
+- 主循环每 10 秒打印 heap 水位（free/min/largest/internal）。
+- 工厂测试页的编码器/SCD40/网络现场诊断。
+- 需要任务级分析时，用 `idf.py monitor` 临时排查（或从 git 历史恢复本组件）。
 
 ---
 

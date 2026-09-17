@@ -14,7 +14,6 @@ typedef enum {
     PAGE_SYSINFO,
     PAGE_FACTORY,
     PAGE_APCFG,
-    PAGE_SYSMON,
     PAGE_TCAL,
     PAGE_COUNT,
 } page_id_t;
