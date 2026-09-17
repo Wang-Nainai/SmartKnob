@@ -353,8 +353,11 @@
 - 归属：sysmon（BUG-038 重构的引入错误）。
 - 修复方式：重扫描路径的任务表增量计算段不加锁（`s_prev`/`s_states` 为
   sysmon_task 私有），锁只保护"发布 s_snap"的瞬间 —— take/gift 严格配对。
-- 当前状态：已修复（锁配对三组全验证）。防回退：同一临界资源的多处加锁
-  必须在改动后逐一核对 take/give 配对，禁止一处锁保护两段不连续代码。
+- 当前状态：**功能已整体移除**（2026-09，见 ARCHITECTURE.md §19）——
+  BUG-031/038/042 三个 sysmon 专属问题随之归零；IWDT 回调 300ms 默认值
+  （触发源已删）；FreeRTOS 运行时统计
+  （GENERATE_RUN_TIME_STATS / RUN_TIME_STATS_USING_ESP_TIMER）一并关闭
+  （CPU 百分比的唯一消费者就是 sysmon）。
 
 ## BUG-041（信息）表盘页眉尾文字与数字的跨页统一
 
@@ -460,6 +463,11 @@
 28. motor shake 状态机每周期执行速度门控，与启动抑制语义一致（BUG-034）。
 29. MQTT 下行命令先校验分片与载荷合法性再解析（BUG-035）。
 30. 跨任务快照的组合读（多字段）必须用临界区保护写入与读取（BUG-036）。
+31. 引入 `uxTaskGetSystemState`/`vTaskGetRunTimeStats` 级别的重量级
+    FreeRTOS API 前必须评估 IWDT 影响（BUG-038/042/移除决定的教训——
+    sysmon 因它们整体移除）；替代方案：主循环日志 + 工厂测试页。
+32. FreeRTOS 运行时统计（GENERATE_RUN_TIME_STATS 等）已关闭；重新开启前
+    确认有真实消费者（此前唯一消费者 sysmon 已移除）。
 
 ---
 

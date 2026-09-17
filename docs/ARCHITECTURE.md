@@ -233,7 +233,7 @@ motor_get_mode_seq
 | 调度周期 | 约 1 ms，`vTaskDelay(pdMS_TO_TICKS(1))` |
 | 每周期顺序 | 排空命令队列 -> `loopFOC()` -> disable/shake/haptic |
 
-`app_main`、LVGL、Input、SCD40、Sysmon 均固定在 core0；NimBLE host 和 WiFi task 也配置在 core0。Motor 独占 core1 是当前实时隔离策略。
+`app_main`、LVGL、Input、SCD40 均固定在 core0；NimBLE host 和 WiFi task 也配置在 core0。Motor 独占 core1 是当前实时隔离策略。
 
 ### 6.4 当前 13 种手感模式
 
@@ -439,7 +439,6 @@ PAGE_SETTING
 PAGE_SYSINFO
 PAGE_FACTORY
 PAGE_APCFG
-PAGE_SYSMON
 ```
 
 `flick_block` 当前用于：
