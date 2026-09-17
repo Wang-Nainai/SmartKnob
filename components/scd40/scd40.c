@@ -4,6 +4,7 @@
 #include "driver/i2c_master.h"
 #include "esp_log.h"
 #include "esp_check.h"
+#include "esp_timer.h"
 #include "scd40.h"
 
 static const char *TAG = "scd40";
@@ -148,10 +149,13 @@ esp_err_t scd40_data_ready(bool *ready)
         return ESP_ERR_INVALID_CRC;
     }
     uint16_t status = (uint16_t)((buf[0] << 8) | buf[1]);
-    /* 判定放宽为整字非零: datasheet 写 ready=bit11(0x800), 但实测该模块
-     * ready 时回报 0x8000 (bit15) —— 若误判 not ready 则永远不读测量值。
-     * 误判的代价只是多读一次 measurement, 垃圾数据会被其 CRC 校验拦下 */
-    *ready = status != 0;
+    /* ready 判定回归 datasheet 精确位 bit11 (0x0800)。
+     * 历史复盘: 旧版"一直不读"的真因是上电时序 (20ms 就 start 被忽略,
+     * BUG-040 已修), 不是掩码 —— 当时放宽为 status!=0 属错误归因。
+     * status 的 bit15(0x8000) 是"测量进行中"的瞬态 (CRC 通过的真实
+     * 响应), 误判 ready 会去读 measurement, 此时 sensor 无数据可给,
+     * I2C 超时 (err=0x103) 刷错误日志 */
+    *ready = (status & 0x0800) != 0;
     if (!*ready) {
         if (not_ready_count++ % 5 == 0) {
             ESP_LOGI(TAG, "data not ready, status=0x%04X", status);
@@ -176,11 +180,17 @@ esp_err_t scd40_data_ready(bool *ready)
 
 esp_err_t scd40_read(scd40_data_t *data)
 {
+    static uint32_t last_err_log_ms = 0;
     uint8_t cmd[2] = { SCD40_CMD_READ_MEAS >> 8, SCD40_CMD_READ_MEAS & 0xFF };
     uint8_t buf[9];
     esp_err_t err = i2c_master_transmit_receive(s_dev, cmd, sizeof(cmd), buf, sizeof(buf), 200);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "read-meas tx/rx failed, err=0x%X", err);
+        /* 偶发总线超时限频: 每 10s 最多一条, 避免刷屏 */
+        uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+        if (now - last_err_log_ms > 10000) {
+            ESP_LOGE(TAG, "read-meas tx/rx failed, err=0x%X", err);
+            last_err_log_ms = now;
+        }
         return err;
     }
     if (!scd40_verify_crc(buf, 3)) {
