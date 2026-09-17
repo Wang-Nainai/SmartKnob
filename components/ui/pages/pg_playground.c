@@ -180,12 +180,12 @@ static void pg_playground_create(page_t *p)
     lv_obj_set_style_text_color(hint, lv_color_hex(XK_COLOR_FAINT), 0);
     lv_obj_set_style_text_font(hint, &lv_font_msyh_16, 0);
     lv_label_set_text(hint, "\xE7\x82\xB9\xE5\x87\xBB\xE5\x88\x87\xE6\x8D\xA2\xE6\xA8\xA1\xE5\xBC\x8F");
-    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -10);
+    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -4);   /* 统一底部文字低位 */
 
     d->label_mode = lv_label_create(p->root);
     lv_obj_set_style_text_color(d->label_mode, lv_color_hex(XK_COLOR_GRAY), 0);
     lv_obj_set_style_text_font(d->label_mode, &lv_font_msyh_16, 0);
-    lv_obj_align(d->label_mode, LV_ALIGN_TOP_MID, 0, 34);
+    lv_obj_align(d->label_mode, LV_ALIGN_TOP_MID, 0, 28);   /* 与 pg_hass 统一: 34 时离表盘过近 */
 
     /* ---- 表盘 (与智能家居页同款 Apple 风格) ----
      * 外圈刻度圈 -> 全周暗环 -> 内层渐变圆 -> 主题蓝指示点 -> 中央大数值 */
@@ -241,13 +241,14 @@ static void pg_playground_create(page_t *p)
     lv_obj_set_style_arc_color(d->range_arc, lv_color_hex(XK_COLOR_ACCENT), LV_PART_INDICATOR);
     lv_obj_remove_flag(d->range_arc, LV_OBJ_FLAG_CLICKABLE);
 
-    /* 越界红弧: 出界时从量程窗口边缘溢出 (X-Knob 语言) */
+    /* 越界红弧: 出界时从量程窗口边缘溢出 (X-Knob 语言)
+     * bg_angles 必须全周: LVGL 把 indicator 钳制在 bg 弧范围内,
+     * bg=(0,0) 时红弧被裁/错位 (ADJUSTER 等模式红弧乱画的根因) */
     d->red_arc = lv_arc_create(p->root);
     lv_obj_set_size(d->red_arc, 204, 204);
     lv_obj_set_pos(d->red_arc, 18, 66);
     lv_arc_set_rotation(d->red_arc, 0);
-    lv_arc_set_bg_angles(d->red_arc, 0, 0);
-    lv_arc_set_range(d->red_arc, 0, 100);
+    lv_arc_set_bg_angles(d->red_arc, 0, 360);
     lv_arc_set_value(d->red_arc, 0);
     lv_obj_remove_style(d->red_arc, NULL, LV_PART_KNOB);
     lv_obj_set_style_arc_width(d->red_arc, 12, LV_PART_INDICATOR);

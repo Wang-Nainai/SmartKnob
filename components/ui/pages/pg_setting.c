@@ -548,19 +548,19 @@ static void pg_setting_create(page_t *p)
     lv_obj_set_style_text_color(d->label_value, lv_color_hex(XK_COLOR_TEXT), 0);
     lv_obj_set_style_text_font(d->label_value, &lv_font_montserrat_48, 0);
     lv_label_set_text(d->label_value, "0");
-    lv_obj_align(d->label_value, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_align(d->label_value, LV_ALIGN_CENTER, 0, 4);   /* +4px 与 pg_playground 统一视觉居中 */
 
     d->label_unit = lv_label_create(d->edit_scr);
     lv_obj_set_style_text_color(d->label_unit, lv_color_hex(XK_COLOR_GRAY), 0);
     lv_obj_set_style_text_font(d->label_unit, &lv_font_msyh_16, 0);
     lv_label_set_text(d->label_unit, "%");
-    lv_obj_align(d->label_unit, LV_ALIGN_CENTER, 0, 58);
+    lv_obj_align(d->label_unit, LV_ALIGN_CENTER, 0, 62);   /* 跟随数字下移同步 */
 
     lv_obj_t *hint = lv_label_create(d->edit_scr);
     lv_obj_set_style_text_color(hint, lv_color_hex(XK_COLOR_FAINT), 0);
     lv_obj_set_style_text_font(hint, &lv_font_msyh_16, 0);
     lv_label_set_text(hint, "\xE6\x97\x8B\xE8\xBD\xAC\xE8\xB0\x83\xE8\x8A\x82 \xC2\xB7 \xE7\x82\xB9\xE5\x87\xBB\xE4\xBF\x9D\xE5\xAD\x98");
-    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -14);
+    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -4);   /* 统一底部文字低位 */
 
     d->timer = lv_timer_create(setting_timer_cb, 100, d);
     motor_set_mode(MOTOR_MODE_UNBOUNDED_DETENTS, 0, 0);
