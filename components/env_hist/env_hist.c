@@ -5,7 +5,7 @@
 
 /* 环境历史环形缓冲: scd40 任务按间隔采样。
  * 整块缓冲放 PSRAM, 避免吃内部内存(内部 free 仅 ~7KB)。
- * hi-res 2h@60s 给设备 UI, day 24h@5min 给 web 记录。 */
+ * hi-res 2h@60s 给设备 UI, day 24h@60s 给 web 记录。 */
 typedef struct {
     /* 2h @ 60s */
     uint16_t co2[ENV_HIST_N];
@@ -15,7 +15,7 @@ typedef struct {
     int      count;
     uint32_t seq;
     int64_t  last_us;
-    /* 24h @ 5min */
+    /* 24h @ 60s */
     uint16_t day_co2[ENV_DAY_N];
     int16_t  day_temp_x10[ENV_DAY_N];
     int16_t  day_rh_x10[ENV_DAY_N];

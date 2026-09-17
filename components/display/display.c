@@ -54,7 +54,6 @@ static const char *TAG = "display";
 
 static _lock_t lvgl_api_lock;
 static lv_display_t *lvgl_disp = NULL;
-static lv_obj_t *status_label = NULL;
 
 /* ---- Backlight PWM + auto screen-off ---- */
 #define LCD_BL_LEDC_TIMER    LEDC_TIMER_0
@@ -548,13 +547,9 @@ esp_err_t display_init(void)
     lv_display_set_color_format(lvgl_disp, LV_COLOR_FORMAT_RGB565);
     lv_display_set_flush_cb(lvgl_disp, lvgl_flush_cb);
 
-    ESP_LOGI(TAG, "Create status label");
+    /* 启动屏背景 (smartknob_ui_init 随后 lv_obj_clean 并接管全部 UI) */
     lv_obj_t *scr = lv_display_get_screen_active(lvgl_disp);
     lv_obj_set_style_bg_color(scr, lv_color_hex(0x000000), 0);
-    status_label = lv_label_create(scr);
-    lv_label_set_text(status_label, "SmartKnob\nStarting...");
-    lv_obj_set_style_text_color(status_label, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_center(status_label);
 
     ESP_LOGI(TAG, "Install LVGL tick timer");
     const esp_timer_create_args_t lvgl_tick_timer_args = {
@@ -618,22 +613,6 @@ esp_err_t display_init(void)
 
     ESP_LOGI(TAG, "Display init done");
     return ESP_OK;
-}
-
-esp_err_t display_show_text(const char *text)
-{
-    if (!lvgl_disp || !status_label) return ESP_ERR_INVALID_STATE;
-
-    _lock_acquire(&lvgl_api_lock);
-    lv_label_set_text(status_label, text);
-    _lock_release(&lvgl_api_lock);
-
-    return ESP_OK;
-}
-
-void display_set_status_label(void *label)
-{
-    status_label = (lv_obj_t *)label;
 }
 
 void display_lvgl_lock(void)

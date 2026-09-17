@@ -5,8 +5,6 @@
 #include <stdbool.h>
 
 esp_err_t display_init(void);
-esp_err_t display_show_text(const char *text);
-void display_set_status_label(void *label);
 void display_lvgl_lock(void);
 void display_lvgl_unlock(void);
 
