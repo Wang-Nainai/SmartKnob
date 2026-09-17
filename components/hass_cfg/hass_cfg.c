@@ -30,10 +30,10 @@ static uint8_t parse_type(const char *t)
     if (len == 6 && !strncmp(t, "\xE7\xA9\xBA\xE8\xB0\x83", 6)) {   /* 空调 */
         return HASS_TYPE_AC;
     }
-    if (len == 5 && !strcmp(t, "light")) {
+    if (len == 5 && !strncmp(t, "light", 5)) {
         return HASS_TYPE_LIGHT;
     }
-    if (len == 2 && !strcmp(t, "ac")) {
+    if (len == 2 && !strncmp(t, "ac", 2)) {
         return HASS_TYPE_AC;
     }
     return 0xFF;

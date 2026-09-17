@@ -238,7 +238,7 @@ static const char page_html[] =
     "function api(a,v){fetch('/api/set',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},"
     "body:'action='+a+'&value='+encodeURIComponent(v||'')}).then(r=>r.text()).then(t=>msg(t)).catch(()=>{})}"
     "function dot(id,on){document.getElementById(id).className='dot '+(on?'on':'off')}"
-    "const modes=['\u65e0\u8fb9\u754c\u548c\u5236\u52a8','\u6709\u8fb9\u754c\u65e0\u5236\u52a8','\u591a\u5708\u65e0\u5236\u52a8','\u5f00\u5173\u6a21\u5f0f','\u81ea\u52a8\u56de\u4e2d','\u7cbe\u7ec6\u65e0\u5236\u52a8','\u7cbe\u7ec6\u6709\u5236\u52a8','\u7c97\u7565\u5f3a\u5236\u52a8','\u7c97\u7565\u5f31\u5236\u52a8','\u78c1\u6027\u5236\u52a8','\u56de\u4e2d\u5e26\u5236\u52a8','\u65e0\u8fb9\u754c\u68d8\u8f6e'];"
+    "const modes=['\u65e0\u8fb9\u754c\u548c\u5236\u52a8','\u6709\u8fb9\u754c\u65e0\u5236\u52a8','\u591a\u5708\u65e0\u5236\u52a8','\u5f00\u5173\u6a21\u5f0f','\u81ea\u52a8\u56de\u4e2d','\u7cbe\u7ec6\u65e0\u5236\u52a8','\u7cbe\u7ec6\u6709\u5236\u52a8','\u7c97\u7565\u5f3a\u5236\u52a8','\u7c97\u7565\u5f31\u5236\u52a8','\u78c1\u6027\u5236\u52a8','\u56de\u4e2d\u5e26\u5236\u52a8','\u65e0\u8fb9\u754c\u68d8\u8f6e','\u8c03\u8282\u5668'];"
     "const sel=document.getElementById('mmode');"
     "modes.forEach((m,i)=>{const o=document.createElement('option');o.value=i;o.textContent=(i+1)+'. '+m;sel.appendChild(o)});"
     "let prefillDone=false;"
@@ -339,6 +339,26 @@ static esp_err_t handler_root(httpd_req_t *req)
     return httpd_resp_send(req, page_html, HTTPD_RESP_USE_STRLEN);
 }
 
+/* JSON 字符串转义(\n -> \\n, " 与 \ 前加 \\), 通用 helper (转义后保证 JSON 可解析) */
+static size_t json_escape(const char *src, char *dst, size_t size)
+{
+    size_t o = 0;
+    for (size_t i = 0; src[i] && o < size - 3; i++) {
+        unsigned char c = (unsigned char)src[i];
+        if (c == '"' || c == '\\') {
+            dst[o++] = '\\';
+            dst[o++] = (char)c;
+        } else if (c == '\n') {
+            dst[o++] = '\\';
+            dst[o++] = 'n';
+        } else {
+            dst[o++] = (char)c;
+        }
+    }
+    dst[o] = 0;
+    return o;
+}
+
 static esp_err_t handler_status(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "HTTP GET %s", req->uri);
@@ -350,6 +370,12 @@ static esp_err_t handler_status(httpd_req_t *req)
     webcfg_get_str("mqtt_uri", mqtt_uri, sizeof(mqtt_uri), "");
     webcfg_get_str("mqtt_user", mqtt_user, sizeof(mqtt_user), "");
     webcfg_get_str("mqtt_pass", mqtt_pass, sizeof(mqtt_pass), "");
+    /* 用户自设字符串可能含 " 或 \ —— 直接 %s 会破坏 JSON 使整页 /status 失败 */
+    char ssid_e[66] = {0}, uri_e[256] = {0}, user_e[128] = {0}, pass_e[128] = {0};
+    json_escape(ssid, ssid_e, sizeof(ssid_e));
+    json_escape(mqtt_uri, uri_e, sizeof(uri_e));
+    json_escape(mqtt_user, user_e, sizeof(user_e));
+    json_escape(mqtt_pass, pass_e, sizeof(pass_e));
     char devcfg[192] = {0};
     webcfg_get_str("hass_devices", devcfg, sizeof(devcfg), "");
     if (!devcfg[0]) {
@@ -398,6 +424,8 @@ static esp_err_t handler_status(httpd_req_t *req)
 
     char ap_ssid[33] = {0}, ap_ip[16] = {0};
     bool ap = app_state_get_ap(ap_ssid, sizeof(ap_ssid), ap_ip, sizeof(ap_ip));
+    char ap_ssid_e[66] = {0};
+    json_escape(ap_ssid, ap_ssid_e, sizeof(ap_ssid_e));
 
     int n = snprintf(buf, sizeof(buf),
                      "{\"ip\":\"%s\",\"ssid\":\"%s\",\"mqtt_uri\":\"%s\",\"mqtt_user\":\"%s\",\"mqtt_pass\":\"%s\","
@@ -409,11 +437,11 @@ static esp_err_t handler_status(httpd_req_t *req)
                      "\"brightness\":%d,\"timeout\":%d,"
                      "\"heap\":%u,\"rssi\":%d,"
                      "\"version\":\"%s\",\"uptime\":\"%ud %02uh %02um\"}",
-                     s_ip, ssid, mqtt_uri, mqtt_user, mqtt_pass, devjson,
+                     s_ip, ssid_e, uri_e, user_e, pass_e, devjson,
                      app_state_get_wifi() ? "true" : "false",
                      s_mqtt ? "true" : "false",
                      ap ? "true" : "false",
-                     ap_ssid, ap_ip,
+                     ap_ssid_e, ap_ip,
                      blehid_is_connected() ? "true" : "false",
                      env.co2_ppm, (double)env.temperature_c, (double)env.humidity_pct,
                      (int)motor_get_mode(), (long)motor_get_position(),
