@@ -1,3 +1,5 @@
 dependencies:
   lvgl/lvgl: 9.2.0
-  espressif/esp_simplefoc: =*
+  # 版本锁定: `=*` 会随组件仓库升级漂移, 曾遇 API 变化编译失败
+  # (当前基线验证版本, 见 dependencies.lock)
+  espressif/esp_simplefoc: 1.4.1

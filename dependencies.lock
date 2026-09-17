@@ -79,6 +79,6 @@ dependencies:
 direct_dependencies:
 - espressif/esp_simplefoc
 - lvgl/lvgl
-manifest_hash: b280bb1668fc28ea396dff9132dbe4511284300373336ca219c43e64da5a4f1a
+manifest_hash: 8c8c6de7a332bb54ec9d5642c51655ce4e7ffe716f8c3f934604c66ae9029e8c
 target: esp32s3
 version: 2.0.0
