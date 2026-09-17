@@ -89,6 +89,14 @@ powershell -ExecutionPolicy Bypass -File tools\build.ps1 build
 powershell -ExecutionPolicy Bypass -File tools\build.ps1 flash
 ```
 
+脚本会自动探测 ESP-IDF 安装位置；探测不到时显式指定一次：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\build.ps1 -IdfPath C:\Espressif\frameworks\esp-idf-v5.5.5 build
+```
+
+也可以在官方 "ESP-IDF PowerShell" 里直接用 `idf.py`，不必经过本脚本。
+
 标准 idf.py 流程：
 
 ```bash
