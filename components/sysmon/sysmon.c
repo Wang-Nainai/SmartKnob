@@ -95,10 +95,9 @@ static void sample_once(void)
     }
     uint32_t d_idle0 = 0, d_idle1 = 0;
 
-    /* 按 xTaskHandle 匹配上一轮, 计算各任务运行时增量 */
-    if (xSemaphoreTake(s_snap_mux, portMAX_DELAY) != pdTRUE) {
-        return;
-    }
+    /* 任务表增量计算段: s_prev/s_states 为 sysmon_task 私有, 无需加锁;
+     * 锁只保护"发布 s_snap 给读者"的瞬间 (L98 的旧锁点已删除,
+     * 此前 take 两 give 一造成 mutex 泄漏, LVGL get_snapshot 永久阻塞) */
     s_snap.task_count = 0;
     for (UBaseType_t i = 0; i < n && s_snap.task_count < SYSMON_MAX_TASKS; i++) {
         TaskStatus_t *st = &s_states[i];
@@ -140,8 +139,7 @@ static void sample_once(void)
     if (cpu0 > 100) cpu0 = 100;
     if (cpu1 > 100) cpu1 = 100;
 
-    /* 堆采样移出临界区: heap_caps_* 内部取堆互斥锁, 若在关中断临界区内
-     * 拿锁, 持锁任务恰好被切走时将死锁(本任务中断已关) */
+    /* 堆采样在锁外: heap_caps_* 内部取堆互斥锁, 不与快照锁嵌套 */
     uint32_t int_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     uint32_t int_total = heap_caps_get_total_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     uint32_t ps_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
