@@ -149,13 +149,14 @@ esp_err_t scd40_data_ready(bool *ready)
         return ESP_ERR_INVALID_CRC;
     }
     uint16_t status = (uint16_t)((buf[0] << 8) | buf[1]);
-    /* ready 判定回归 datasheet 精确位 bit11 (0x0800)。
-     * 历史复盘: 旧版"一直不读"的真因是上电时序 (20ms 就 start 被忽略,
-     * BUG-040 已修), 不是掩码 —— 当时放宽为 status!=0 属错误归因。
-     * status 的 bit15(0x8000) 是"测量进行中"的瞬态 (CRC 通过的真实
-     * 响应), 误判 ready 会去读 measurement, 此时 sensor 无数据可给,
-     * I2C 超时 (err=0x103) 刷错误日志 */
-    *ready = (status & 0x0800) != 0;
+    /* 判定 = 低 11 位非零 (回归最初形态)。实测该模块 ready 时回报
+     * 0x8006 —— 低 11 位 = 0x006 (bit1/bit2)，datasheet 写的 bit11(0x800)
+     * 与真实固件不符。
+     * 历史: 旧版"一直不读"的真因有两个，都已修 —— 1) 上电时序
+     * (20ms 就 start 被忽略，当时 status 恒 0x0000 判 not ready 是正确
+     * 行为); 2) 命令间隔不足 (ready 后立即 read 超时，vTaskDelay(2ms) 已修)。
+     * 中间版本误改 (status!=0 / &0x0800) 均为对这两个真因的错误归因 */
+    *ready = (status & 0x7FF) != 0;
     if (!*ready) {
         if (not_ready_count++ % 5 == 0) {
             ESP_LOGI(TAG, "data not ready, status=0x%04X", status);
