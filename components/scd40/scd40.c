@@ -148,7 +148,10 @@ esp_err_t scd40_data_ready(bool *ready)
         return ESP_ERR_INVALID_CRC;
     }
     uint16_t status = (uint16_t)((buf[0] << 8) | buf[1]);
-    *ready = (status & 0x7FF) != 0;  /* SCD4x: least-significant 11 bits non-zero => data ready */
+    /* 判定放宽为整字非零: datasheet 写 ready=bit11(0x800), 但实测该模块
+     * ready 时回报 0x8000 (bit15) —— 若误判 not ready 则永远不读测量值。
+     * 误判的代价只是多读一次 measurement, 垃圾数据会被其 CRC 校验拦下 */
+    *ready = status != 0;
     if (!*ready) {
         if (not_ready_count++ % 5 == 0) {
             ESP_LOGI(TAG, "data not ready, status=0x%04X", status);

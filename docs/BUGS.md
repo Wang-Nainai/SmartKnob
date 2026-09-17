@@ -299,20 +299,21 @@
   env_hist 读者为 UI/HTTP，撕裂只影响个别数据点；display 熄屏竞态的残留
   窗口会被下一次触摸/旋转的 notify_activity 自愈。
 
-## BUG-038（Regression）进入系统监控偶发 IWDT panic 重启
+## BUG-038（Regression）进入系统监控偶发 IWDT panic 重启（二次修复：快照锁改 mutex）
 
-- 现象（实机）：进入 pg_sysmon 约 300ms 后触发
-  `Interrupt wdt timeout on CPU0`，整机重启。backtrace：
-  `prvTaskCheckFreeStackSpace → uxTaskGetSystemState → sample_once`。
-- 根因：`uxTaskGetSystemState` 挂起双核调度并逐任务扫描栈水印，多任务 +
-  BLE/WiFi coex 场景下长时间占用双核 spinlock；默认 300ms 的
-  `CONFIG_ESP_INT_WDT_TIMEOUT_MS` 在该窗口内触发（core1 SysTick 的
-  `xTaskIncrementTickOtherCores` 自旋等待画面与此吻合）。
-- 修复方式：1) `CONFIG_ESP_INT_WDT_TIMEOUT_MS` 300→900（SDK 与 FreeRTOS
-  包装两处，defaults 同步）；2) sysmon 重扫描降频 1Hz→0.2Hz（每 5 轮才做
-  一次 `uxTaskGetSystemState`，其余轮次复用上一轮任务表、仅刷新内存字段）。
-- 当前状态：已修复（编译验证）。防回退：sysmon 的重扫描降频与 IWDT 加宽
-  不可回退；若其它模块再引入 `uxTaskGetSystemState` 需同样节流。
+- 现象：第一轮修复（IWDT 900ms + 重扫描降频 5s）后仍重启，但形态变化为
+  `assert failed: spinlock_acquire (lock->count > 0 && lock->count < 0xFF)`
+  —— `sample_once` 的 `portENTER_CRITICAL(&s_snap_mux)` 断言失败。
+- 根因：FreeRTOS SMP spinlock 的递归计数在 `uxTaskGetSystemState`（挂起调度
+  + 内部 kernel spinlock）与跨任务快照读取（LVGL 任务 `sysmon_get_snapshot`）
+  交叉时损坏 —— spinlock 的 owner/递归语义不适合这种"重扫描挂起调度 + 多
+  任务短读"场景。
+- 修复方式：sysmon 快照保护从 spinlock（portENTER_CRITICAL）整体改为
+  FreeRTOS mutex（`xSemaphoreCreateMutex`）—— 读者/写者均为任务上下文，
+  持锁时间为结构体拷贝，无 ISR 使用；IWDT 900ms 保留作为
+  `uxTaskGetSystemState` 自身关中断窗口的兜底。
+- 当前状态：已修复（编译验证）。防回退：sysmon 快照保护禁止改回
+  portENTER_CRITICAL spinlock。
 
 ## BUG-039（Baseline）SCD40 持续 not ready，自愈循环反复无效
 
@@ -321,10 +322,12 @@
 - 分析：CRC 校验通过说明是传感器真实响应；固件侧时序已按 datasheet
   （上电 1000ms / stop 后 800ms / reinit 后 30ms）。持续性 0x0000 指向
   传感器硬件状态（焊接/供电/芯片劣化），需替换或换线验证。
-- 修复方式：自愈退避 —— 连续自愈失败 2 次后间隔 60s→180s（有数据即复位），
-  避免每 60 秒反复 stop/reinit 折腾传感器；无数据的状态字日志降频到每
-  5 拍一条。
-- 当前状态：固件侧退避已加；传感器本体需硬件排查（换线/替换验证）。
+- 修复方式：1) 自愈退避 —— 连续自愈失败 2 次后间隔 60s→180s（有数据即复位）；
+  2) **ready 判定放宽为整字非零** —— datasheet 写 ready=bit11(0x800)，实测
+  该模块 ready 时一拍回报 0x8000(bit15) 被 `&0x7FF` 误判 not ready；放宽后
+  误判代价只是多读一次测量，垃圾数据由 read_measurement 的 CRC 校验拦截。
+- 当前状态：固件侧已修（退避 + 判定放宽），烧录验证中；若仍无数据则传感器
+  本体需硬件排查（换线/替换验证）。
 
 ---
 

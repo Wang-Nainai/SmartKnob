@@ -4,6 +4,7 @@
 #include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -32,7 +33,12 @@ static UBaseType_t s_prev_count = 0;
 static uint32_t s_last_total = 0;
 
 static sysmon_snapshot_t s_snap;
-static portMUX_TYPE s_snap_mux = portMUX_INITIALIZER_UNLOCKED;
+/* 快照保护用 FreeRTOS mutex 而非 spinlock(portENTER_CRITICAL):
+ * 1) 读者在 LVGL 任务、写者在 sysmon 任务, 都是任务上下文, 无需关中断;
+ * 2) spinlock 的递归计数与 uxTaskGetSystemState(挂起调度+内部 spinlock)
+ *    交叉时曾触发 spinlock.h:106 的 count assert (实机重启);
+ * 3) 持锁时间 = 结构体拷贝, 极短, 无死锁风险 */
+static SemaphoreHandle_t s_snap_mux = NULL;
 
 static volatile bool s_enabled = false;
 static TaskHandle_t s_task_handle = NULL;
@@ -42,9 +48,10 @@ void sysmon_get_snapshot(sysmon_snapshot_t *out)
     if (!out) {
         return;
     }
-    portENTER_CRITICAL(&s_snap_mux);
-    *out = s_snap;
-    portEXIT_CRITICAL(&s_snap_mux);
+    if (xSemaphoreTake(s_snap_mux, portMAX_DELAY) == pdTRUE) {
+        *out = s_snap;
+        xSemaphoreGive(s_snap_mux);
+    }
 }
 
 static void sample_once(void)
@@ -57,13 +64,14 @@ static void sample_once(void)
         uint32_t ps_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
         uint32_t ps_total = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
         uint32_t min_free = esp_get_minimum_free_heap_size();
-        portENTER_CRITICAL(&s_snap_mux);
-        s_snap.int_free = int_free;
-        s_snap.int_total = int_total;
-        s_snap.ps_free = ps_free;
-        s_snap.ps_total = ps_total;
-        s_snap.min_free = min_free;
-        portEXIT_CRITICAL(&s_snap_mux);
+        if (xSemaphoreTake(s_snap_mux, portMAX_DELAY) == pdTRUE) {
+            s_snap.int_free = int_free;
+            s_snap.int_total = int_total;
+            s_snap.ps_free = ps_free;
+            s_snap.ps_total = ps_total;
+            s_snap.min_free = min_free;
+            xSemaphoreGive(s_snap_mux);
+        }
         return;
     }
 
@@ -88,7 +96,9 @@ static void sample_once(void)
     uint32_t d_idle0 = 0, d_idle1 = 0;
 
     /* 按 xTaskHandle 匹配上一轮, 计算各任务运行时增量 */
-    portENTER_CRITICAL(&s_snap_mux);
+    if (xSemaphoreTake(s_snap_mux, portMAX_DELAY) != pdTRUE) {
+        return;
+    }
     s_snap.task_count = 0;
     for (UBaseType_t i = 0; i < n && s_snap.task_count < SYSMON_MAX_TASKS; i++) {
         TaskStatus_t *st = &s_states[i];
@@ -138,7 +148,9 @@ static void sample_once(void)
     uint32_t ps_total = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
     uint32_t min_free = esp_get_minimum_free_heap_size();
 
-    portENTER_CRITICAL(&s_snap_mux);
+    if (xSemaphoreTake(s_snap_mux, portMAX_DELAY) != pdTRUE) {
+        return;
+    }
     s_snap.cpu0 = cpu0;
     s_snap.cpu1 = cpu1;
     s_snap.cpu_total = (cpu0 + cpu1) / 2;
@@ -147,7 +159,7 @@ static void sample_once(void)
     s_snap.ps_free = ps_free;
     s_snap.ps_total = ps_total;
     s_snap.min_free = min_free;
-    portEXIT_CRITICAL(&s_snap_mux);
+    xSemaphoreGive(s_snap_mux);
 
     s_last_total = total;
 }
@@ -188,6 +200,7 @@ void sysmon_set_enabled(bool on)
 
 void sysmon_init(void)
 {
+    s_snap_mux = xSemaphoreCreateMutex();
     if (xTaskCreatePinnedToCore(sysmon_task, "sysmon", 4096, NULL, 1, &s_task_handle, 0) != pdPASS) {
         ESP_LOGE(TAG, "failed to create sysmon task");
     }
