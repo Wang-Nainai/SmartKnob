@@ -416,10 +416,14 @@ static void pg_env_on_rotate(page_t *p, int32_t steps)
     if (steps == 0) {
         return;
     }
-    /* 旋转(有段落感)切换度量: CO2 -> 温度 -> 湿度 循环 */
-    d->metric = (uint8_t)(((d->metric + steps) % 3 + 3) % 3);
+    /* 度量切换: 每个旋转事件只切一格 (取 steps 符号, 不按幅度累计)。
+     * 快速旋转时 5ms 轮询的事件会携带多档 steps, 直接累加会一次跳过
+     * 2~3 个度量 —— 视觉上就是"连续转动不止"。
+     * 同时不调 pm_shake(): 棘轮力反馈本身已是旋转触觉反馈, 额外的
+     * ±力矩脉冲在 UNBOUNDED_DETENTS 模式下会实际推动电机转过脉冲
+     * 幅度, 棘轮跟着步进产生更多事件, 形成"电机自转"的正反馈 */
+    d->metric = (uint8_t)(((d->metric + (steps > 0 ? 1 : -1)) % 3 + 3) % 3);
     env_metric_apply(d);
-    pm_shake();
 }
 
 static void pg_env_on_back(page_t *p)
