@@ -327,6 +327,49 @@
   错误归因，BUG-040 修复后真因是上电时序）。
 - 当前状态：已修复（v1.0.0-17 实测 CO2 正常上报）。
 
+## BUG-040（Regression）越界红弧错位/显示不全 —— red_arc 的 bg_angles 钳制
+
+- 现象：调节器(ADJUSTER)等模式下红弧出现在错误角度位置；其它有界模式
+  红弧"很短一截"。
+- 根因：`red_arc` 创建时 `lv_arc_set_bg_angles(0, 0)`（BUG-022 清零残留）。
+  LVGL 把 indicator 弧钳制在 bg 弧范围内 —— bg=(0,0) 时红弧被裁剪或绕
+  远路错位，与红弧应在的量程窗口位置无关。
+- 归属：UI / pg_playground。
+- 修复方式：`red_arc` 的 `bg_angles` 改为全周 (0, 360)（main 弧宽度 0 保持
+  背景不可见，indicator 由此可画在任意位置）。
+- 当前状态：已修复（编译验证）。防回退：**越界红弧的 bg_angles 必须全周**；
+  任何"只在特定角度画弧"的 arc，其 bg_angles 必须覆盖全部可能的绘制区间
+  （与 BUG-022 同源的第二因子）。
+
+## BUG-041（信息）表盘页眉尾文字与数字的跨页统一
+
+- 现象：各表盘页的顶部标题、底部提示、中央数字位置不统一
+  （pg_playground 标题 y=34 离表盘近、底部 -10 偏高、设置编辑数字未做
+  视觉居中偏移）。
+- 统一约定（本次落地）：
+  - 顶部标题/模式名：`LV_ALIGN_TOP_MID, y=28`
+  - 底部提示文字：`LV_ALIGN_BOTTOM_MID, y=-4`（统一低位）
+  - 中央大数字：`LV_ALIGN_CENTER, y=+4`（48px 数字无下伸部的视觉居中补偿），
+    附属单位标签随数字同步下移
+- 涉及页面：pg_playground / pg_hass / pg_setting / pg_pcdial。
+- 当前状态：已落地。新增表盘类页面必须套用同一套偏移。
+
+## BUG-042（Regression）sysmon 快照锁配对错误导致页面全零卡死
+
+- 现象：进系统监控后所有数据 0%、页面无更新（LVGL 的 get_snapshot 永久阻塞）。
+- 根因：重扫描降频改造时把两处 `portENTER_CRITICAL` 都替换成
+  `xSemaphoreTake`，但 `give` 只保留一处 —— 每轮重扫描净泄漏一次锁，
+  sysmon_task 永久持有 `s_snap_mux`，LVGL 任务的 `sysmon_get_snapshot`
+  阻塞在 `portMAX_DELAY` 上，页面永远停留在创建时的初始值。
+- 归属：sysmon（BUG-038 重构的引入错误）。
+- 修复方式：重扫描路径的任务表增量计算段不加锁（`s_prev`/`s_states` 为
+  sysmon_task 私有），锁只保护"发布 s_snap"的瞬间 —— take/gift 严格配对。
+- 当前状态：**功能已整体移除**（2026-09，见 ARCHITECTURE.md §19）——
+  BUG-031/038/042 三个 sysmon 专属问题随之归零；IWDT 回调 300ms 默认值
+  （触发源已删）；FreeRTOS 运行时统计
+  （GENERATE_RUN_TIME_STATS / RUN_TIME_STATS_USING_ESP_TIMER）一并关闭
+  （CPU 百分比的唯一消费者就是 sysmon）。
+
 ## BUG-043（Regression）ready 判定后立即读测量，I2C 命令间隔不足导致超时刷屏
 
 - 现象：`read-meas tx/rx failed, err=0x103`（ESP_ERR_TIMEOUT）每 5~6 秒刷屏，
@@ -338,37 +381,6 @@
 - 修复方式：`scd40_task` 在判定 ready 与 read 之间加 `vTaskDelay(2ms)`。
 - 当前状态：已修复（编译验证）。防回退：**任何 Sensirion 命令序列之间
   都要保证 >=1ms 间隔**，连续 I2C 命令连发是这类传感器的通用陷阱。
-
-## BUG-043b（逻辑死角）read 失败不参与自愈判定
-
-- 现象（逻辑推演发现）：`scd40_data_ready` 的 not_ready 计数只在
-  "not ready / 总线错误"路径累计；当 ready 状态字置位但 `scd40_read`
-  持续失败（CRC 坏/半字响应/总线超时）时，计数被 ready 分支清零——
-  自愈永不触发，设备永久无数据且几乎无可见异常（read 错误日志已
-  限频 10s）。
-- 修复方式：`scd40_task` 增加 `read_fail_streak` 独立计数——ready 状态
-  下连续 5 次读取失败（约 10 秒）即调用 `scd40_restart_measurement()`
-  强制重启测量，成功读数即清零。
-- 当前状态：已修复（编译验证）。防回退：scd40 的自愈覆盖必须包含
-  "判定→读取"全链路的失败路径，不能只看判定阶段。
-
-## BUG-045（Regression）环境页旋转切度量导致电机"连续转动"
-
-- 现象：环境页旋转切换 CO2/温度/湿度时，旋钮反馈转动后电机自己连续转。
-- 根因（两个叠加）：
-  1) `d->metric + steps` 直接按事件幅度累加——快转时 5ms 轮询的事件
-     携带 2~3 档 steps，一次事件跳过 2~3 个度量，视觉上像连续切换不止；
-  2) 每次旋转都调 `pm_shake()`（±1 力矩脉冲 15ms）——在
-     UNBOUNDED_DETENTS 模式下该脉冲会实际推动电机转过脉冲幅度，棘轮
-     跟着步进产生更多旋转事件，形成 shake→推动→步进→shake 的正反馈。
-- 归属：UI / pg_env。
-- 修复方式：1) metric 切换取 steps 符号（每事件 ±1 格），快转也逐格
-  切换，与棘轮触觉反馈同步；2) 移除 on_rotate 中的 `pm_shake()`（棘轮
-  力反馈已是旋转触觉反馈）。
-- 当前状态：已修复（编译验证）。防回退：**"少选项度量切换"类 on_rotate
-  不得按 steps 幅度累计（每事件限 ±1），不得叠加 pm_shake 脉冲**——
-  与 pg_menu 的多步焦点导航是不同语义（菜单项多需快进，度量切换只有
-  2~3 个选项不需要）。
 
 ## BUG-043b（逻辑死角）read 失败不参与自愈判定
 
@@ -400,48 +412,23 @@
   命令间隔 2ms 保留。防回退：scd40 命令码与判定不得再按 datasheet
   或推测修改，任何变更必须带实测响应 hex 证据。
 
-## BUG-040（Regression）越界红弧错位/显示不全 —— red_arc 的 bg_angles 钳制
+## BUG-045（Regression）环境页旋转切度量导致电机"连续转动"
 
-- 现象：调节器(ADJUSTER)等模式下红弧出现在错误角度位置；其它有界模式
-  红弧"很短一截"。
-- 根因：`red_arc` 创建时 `lv_arc_set_bg_angles(0, 0)`（BUG-022 清零残留）。
-  LVGL 把 indicator 弧钳制在 bg 弧范围内 —— bg=(0,0) 时红弧被裁剪或绕
-  远路错位，与红弧应在的量程窗口位置无关。
-- 归属：UI / pg_playground。
-- 修复方式：`red_arc` 的 `bg_angles` 改为全周 (0, 360)（main 弧宽度 0 保持
-  背景不可见，indicator 由此可画在任意位置）。
-- 当前状态：已修复（编译验证）。防回退：**越界红弧的 bg_angles 必须全周**；
-  任何"只在特定角度画弧"的 arc，其 bg_angles 必须覆盖全部可能的绘制区间
-  （与 BUG-022 同源的第二因子）。
-
-## BUG-042（Regression）sysmon 快照锁配对错误导致页面全零卡死
-
-- 现象：进系统监控后所有数据 0%、页面无更新（LVGL 的 get_snapshot 永久阻塞）。
-- 根因：重扫描降频改造时把两处 `portENTER_CRITICAL` 都替换成
-  `xSemaphoreTake`，但 `give` 只保留一处 —— 每轮重扫描净泄漏一次锁，
-  sysmon_task 永久持有 `s_snap_mux`，LVGL 任务的 `sysmon_get_snapshot`
-  阻塞在 `portMAX_DELAY` 上，页面永远停留在创建时的初始值。
-- 归属：sysmon（BUG-038 重构的引入错误）。
-- 修复方式：重扫描路径的任务表增量计算段不加锁（`s_prev`/`s_states` 为
-  sysmon_task 私有），锁只保护"发布 s_snap"的瞬间 —— take/gift 严格配对。
-- 当前状态：**功能已整体移除**（2026-09，见 ARCHITECTURE.md §19）——
-  BUG-031/038/042 三个 sysmon 专属问题随之归零；IWDT 回调 300ms 默认值
-  （触发源已删）；FreeRTOS 运行时统计
-  （GENERATE_RUN_TIME_STATS / RUN_TIME_STATS_USING_ESP_TIMER）一并关闭
-  （CPU 百分比的唯一消费者就是 sysmon）。
-
-## BUG-041（信息）表盘页眉尾文字与数字的跨页统一
-
-- 现象：各表盘页的顶部标题、底部提示、中央数字位置不统一
-  （pg_playground 标题 y=34 离表盘近、底部 -10 偏高、设置编辑数字未做
-  视觉居中偏移）。
-- 统一约定（本次落地）：
-  - 顶部标题/模式名：`LV_ALIGN_TOP_MID, y=28`
-  - 底部提示文字：`LV_ALIGN_BOTTOM_MID, y=-4`（统一低位）
-  - 中央大数字：`LV_ALIGN_CENTER, y=+4`（48px 数字无下伸部的视觉居中补偿），
-    附属单位标签随数字同步下移
-- 涉及页面：pg_playground / pg_hass / pg_setting / pg_pcdial。
-- 当前状态：已落地。新增表盘类页面必须套用同一套偏移。
+- 现象：环境页旋转切换 CO2/温度/湿度时，旋钮反馈转动后电机自己连续转。
+- 根因（两个叠加）：
+  1) `d->metric + steps` 直接按事件幅度累加——快转时 5ms 轮询的事件
+     携带 2~3 档 steps，一次事件跳过 2~3 个度量，视觉上像连续切换不止；
+  2) 每次旋转都调 `pm_shake()`（±1 力矩脉冲 15ms）——在
+     UNBOUNDED_DETENTS 模式下该脉冲会实际推动电机转过脉冲幅度，棘轮
+     跟着步进产生更多旋转事件，形成 shake→推动→步进→shake 的正反馈。
+- 归属：UI / pg_env。
+- 修复方式：1) metric 切换取 steps 符号（每事件 ±1 格），快转也逐格
+  切换，与棘轮触觉反馈同步；2) 移除 on_rotate 中的 `pm_shake()`（棘轮
+  力反馈已是旋转触觉反馈）。
+- 当前状态：已修复（编译验证）。防回退：**"少选项度量切换"类 on_rotate
+  不得按 steps 幅度累计（每事件限 ±1），不得叠加 pm_shake 脉冲**——
+  与 pg_menu 的多步焦点导航是不同语义（菜单项多需快进，度量切换只有
+  2~3 个选项不需要）。
 
 ---
 
