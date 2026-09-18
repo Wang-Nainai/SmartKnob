@@ -154,6 +154,14 @@ esp_err_t scd40_data_ready(bool *ready)
     }
     if (!scd40_verify_crc(buf, 1)) {
         ESP_LOGW(TAG, "data-ready CRC mismatch: [0x%02X,0x%02X,0x%02X]", buf[0], buf[1], buf[2]);
+        /* 持续坏 CRC 同样计入自愈判定(BUG-046): 否则坏 CRC 状态下
+         * not_ready_count 永不累计, 自愈永不触发(BUG-043b 同类死角) */
+        if (not_ready_count++ >= heal_after) {
+            ESP_LOGW(TAG, "no data (CRC err) for %ds, recovering sensor", heal_after * 2);
+            scd40_restart_measurement();
+            if (++heal_fails > 3) heal_fails = 2;
+            not_ready_count = 0;
+        }
         return ESP_ERR_INVALID_CRC;
     }
     uint16_t status = (uint16_t)((buf[0] << 8) | buf[1]);
