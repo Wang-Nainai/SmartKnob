@@ -46,6 +46,10 @@ static void init_sntp(void)
 static void scd40_task(void *arg)
 {
     scd40_data_t data;
+    /* ready 置位但 read 连续失败(如 CRC 坏/半字响应)的自愈兜底:
+     * data_ready 的计数只在 not ready/总线错误路径累计, read 阶段
+     * 失败不进自愈判定 —— 这里补一条独立计数, 连续失败即重启测量 */
+    int read_fail_streak = 0;
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(CONFIG_SCD40_POLL_INTERVAL_MS));
         bool ready = false;
@@ -57,11 +61,19 @@ static void scd40_task(void *arg)
          * v1.0.0-16 偶发成功的那次恰因前次失败自带 200ms 超时间隔 */
         vTaskDelay(pdMS_TO_TICKS(2));
         if (scd40_read(&data) == ESP_OK) {
+            read_fail_streak = 0;
             ESP_LOGI(TAG, "CO2=%u ppm, T=%.1f C, RH=%.1f %%",
                      data.co2_ppm, data.temperature_c, data.humidity_pct);
             app_state_set_env(data.co2_ppm, data.temperature_c, data.humidity_pct);
             mqtt_ha_publish(data.co2_ppm, data.temperature_c, data.humidity_pct);
             env_hist_push_if_due(data.co2_ppm, data.temperature_c, data.humidity_pct);
+        } else {
+            if (++read_fail_streak >= 5) {
+                /* ready 说有数据但连续 5 次读不到 (约 10s): 强制重启测量 */
+                ESP_LOGW(TAG, "read failed %d times while ready, restarting measurement", read_fail_streak);
+                scd40_restart_measurement();
+                read_fail_streak = 0;
+            }
         }
     }
 }
