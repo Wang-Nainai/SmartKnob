@@ -70,7 +70,7 @@ components/
   hass_cfg/    HA 设备槽位配置解析（Web 表单 → NVS）
   webcfg/      Web 管理台 + OTA + NVS 配置
   wifi/        WiFi STA + SoftAP 配网回退
-  scd40/       SCD40 驱动（含 60 秒自愈重启）
+  scd40/       SCD40 驱动（上电 1s 时序 + 全链路失败自愈退避）
   env_hist/    环境历史环形缓冲（PSRAM）
   app_state/   跨任务环境/网络状态快照
   led/         WS2812 状态灯（RMT，多任务互斥）
